@@ -1,6 +1,7 @@
 package proto
 
 import (
+	"bufio"
 	"encoding/json"
 	"log"
 	"net"
@@ -47,12 +48,7 @@ type Message struct {
 
 // Proto - Main object to use. Has functions to interact with stuff
 type Proto struct {
-	conn net.Conn
-}
-
-//Init - Sets up the proto object
-func (p Proto) Init(c net.Conn) {
-	p.conn = c
+	Conn net.Conn
 }
 
 //SendLogin - For clients to send their credentials to the server
@@ -66,8 +62,9 @@ func (p Proto) SendLogin(username string, password string) error {
 	if err != nil {
 		return err
 	}
-	//we might need a newline but if the other end is go we should be fine?
-	p.conn.Write([]byte(j))
+	//TODO compress into one call
+	p.Conn.Write([]byte(j))
+	p.Conn.Write([]byte("\n"))
 	return nil
 }
 
@@ -83,7 +80,8 @@ func (p Proto) SendBadLoginResponse() error {
 		return err
 	}
 	//we might need a newline but if the other end is go we should be fine?
-	p.conn.Write([]byte(j))
+	p.Conn.Write([]byte(j))
+	p.Conn.Write([]byte("\n"))
 	return nil
 }
 
@@ -103,28 +101,41 @@ func (p Proto) SendLoginResponse(key string) error {
 		return err
 	}
 	//we might need a newline but if the other end is go we should be fine?
-	p.conn.Write([]byte(j))
+	p.Conn.Write([]byte(j))
+	p.Conn.Write([]byte("\n"))
 	return nil
 }
 
 //Decode - returns a type defined in this package
 func (p Proto) Decode() interface{} {
 
-	d := json.NewDecoder(p.conn)
+	text, err := bufio.NewReader(p.Conn).ReadBytes('\n')
+	if err != nil {
+		log.Println(err)
+		return nil
+	}
+
 	var a Type
-	err := d.Decode(&a)
+	err = json.Unmarshal(text, &a)
 	check(err)
 
-	var i interface{}
-
 	if a.Type == "login" {
-		err := d.Decode(&i)
+		var l Login
+		err := json.Unmarshal(text, &l)
 		check(err)
+		return l
 	} else if a.Type == "message" {
-		err := d.Decode(&i)
+		var m Message
+		err := json.Unmarshal(text, &m)
 		check(err)
+		return m
+	} else if a.Type == "login-response" {
+		var lr LoginResponse
+		err := json.Unmarshal(text, &lr)
+		check(err)
+		return lr
 	}
-	return i
+	return nil
 }
 
 func check(e error) {

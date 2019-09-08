@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"reflect"
@@ -26,19 +27,19 @@ func (c Client) check(e error) {
 }
 
 //Init - get the client socket ready
-func (c Client) Init(host string, port int) {
+func (c *Client) Init(host string, port int) {
 	var err error
-	c.conn, err = net.Dial("tcp", host+":"+strconv.Itoa(port))
+	a, err := net.Dial("tcp", host+":"+strconv.Itoa(port))
+	c.conn = a
 	c.check(err)
-	c.proto = proto.Proto{}
-	c.proto.Init(c.conn)
+	c.proto = proto.Proto{Conn: c.conn}
 
 }
 
-func (c Client) getLogin() proto.Login {
-	var ret proto.Login
+func (c Client) getLoginResponse() proto.LoginResponse {
+	var ret proto.LoginResponse
 	switch msg := c.proto.Decode().(type) {
-	case proto.Login:
+	case proto.LoginResponse:
 		ret = msg
 	default:
 		r := reflect.TypeOf(msg)
@@ -74,9 +75,10 @@ func (c Client) GetCredentials() (string, string) {
 }
 
 func main() {
-	var c Client
+	c := new(Client)
 	c.Init("localhost", 1200)
-	username, password := c.GetCredentials()
-	c.SendLogin(username, password)
-	c.getLogin()
+	//username, password := c.GetCredentials()
+	c.SendLogin("justin", "poop")
+	lr := c.getLoginResponse()
+	log.Println(lr)
 }

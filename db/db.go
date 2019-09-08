@@ -35,14 +35,14 @@ func getHashedPassword(in string) (string, error) {
 }
 
 //Connect gets the user record from the database
-func (d DB) Connect() error {
+func (d *DB) Connect(hostname string, password string) error {
 	// connect to the database
 	var err error
-	d.dbh, err = sql.Open("mysql", "termtexter:test@tcp(justinlearns.tk)/termtexter")
+	d.dbh, err = sql.Open("mysql", "termtexter:"+password+"@tcp("+hostname+")/termtexter")
 	return err
 }
 
-//GetUserID gets the user id from the database
+//GetUserID gets the user id from the database if it exists
 func (d DB) GetUserID(username string) (string, error) {
 	rows, err := d.dbh.Query("select user_id from users where username = ?", username)
 	check(err)
@@ -83,28 +83,24 @@ func (d DB) UserExists(username string) (bool, error) {
 }
 
 //IsValidLogin will determine if the login was valid. Pass in a plain text password
-func (d DB) IsValidLogin(uid string, password string) (bool, error) {
-	epassword, err := getHashedPassword(password)
-	check(err)
-	rows, err := d.dbh.Query("select user_id, username, displayname, password from users where user_id = ? and password = ?", uid, epassword)
+func (d DB) IsValidLogin(uid string, password string) bool {
+	rows, err := d.dbh.Query("select password from users where user_id = ?", uid)
 	check(err)
 	defer rows.Close()
-	c := 0
-	for rows.Next() {
-		c++
+	rows.Next()
+	var epassword string
+	err = rows.Scan(&epassword)
+	check(err)
+	res := bcrypt.CompareHashAndPassword([]byte(password), []byte(password))
+	if res == nil {
+		return true
 	}
-	var b bool
-	if c > 0 {
-		b = true
-	} else {
-		b = false
-	}
-	return b, err
+	return false
 }
 
 //AddClient inserts the uuid we're handing to this client over to the user
-func (d DB) AddClient(uid, uuid string) error {
-	res, err := d.dbh.Exec("insert clients set user_id = ?, key = ?", uid, uuid)
+func (d *DB) AddClient(uid, uuid string) error {
+	res, err := d.dbh.Exec("insert into clients (user_id,key) values (?,?)", uid, uuid)
 	fmt.Println(res)
 	return err
 }

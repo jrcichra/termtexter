@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"reflect"
 	"strconv"
 
@@ -33,7 +34,7 @@ func (s Server) Init(port int) {
 	s.check(err)
 
 	// connect to our db package
-	s.db.Connect()
+	s.db.Connect(os.Args[1], os.Args[2])
 
 	for {
 		conn, err := listener.Accept()
@@ -59,19 +60,24 @@ func (s Server) handleLogin(l proto.Login, p proto.Proto) {
 	}
 
 	// We have a login packet, it has a username and password, let's check it against the database
-	id, err := s.db.GetUserID(l.Username)
-	res, err := s.db.IsValidLogin(id, l.Password)
-	s.check(err)
-	if res {
-		//They are a real user. Give them a unique id for their successful login. This key lets them send messages from their account on the machine they logged in from
-		uuid, err := uuid.NewRandom()
-		s.check(err)
-		// Add this key to the DB, so we can check with this for each message
-		err = s.db.AddClient(id, uuid.String())
-		s.check(err)
-		// Send the packet with the updates
-		err = p.SendLoginResponse(uuid.String())
-		s.check(err)
+	id, _ := s.db.GetUserID(l.Username)
+	if id != "" {
+		res := s.db.IsValidLogin(id, l.Password)
+		if res {
+			//They are a real user. Give them a unique id for their successful login. This key lets them send messages from their account on the machine they logged in from
+			uuid, err := uuid.NewRandom()
+			s.check(err)
+			// Add this key to the DB, so we can check with this for each message
+			err = s.db.AddClient(id, uuid.String())
+			s.check(err)
+			// Send the packet with the updates
+			err = p.SendLoginResponse(uuid.String())
+			s.check(err)
+		} else {
+			// They don't exist, craft a response that doesn't have a good login
+			err := p.SendBadLoginResponse()
+			s.check(err)
+		}
 	} else {
 		// They don't exist, craft a response that doesn't have a good login
 		err := p.SendBadLoginResponse()
@@ -88,13 +94,12 @@ func (s Server) handleMessage(m proto.Message, p proto.Proto) {
 }
 
 func (s Server) handleClient(conn net.Conn) {
-	defer conn.Close() // close connection before exit
+	//defer conn.Close() // close connection before exit
 
 	//get a proto object which handles the message/protocol for us
-	p := proto.Proto{}
-	p.Init(conn)
-
-	for {
+	p := proto.Proto{Conn: conn}
+	flag := false
+	for !flag {
 		//based on the message type, take different actions
 		switch msg := p.Decode().(type) {
 		case proto.Login:
@@ -102,8 +107,14 @@ func (s Server) handleClient(conn net.Conn) {
 		case proto.Message:
 			s.handleMessage(msg, p)
 		default:
-			r := reflect.TypeOf(msg)
-			fmt.Printf("Other:%v\n", r)
+			if msg == nil {
+				log.Println("Somebody left")
+				flag = true
+				break
+			} else {
+				r := reflect.TypeOf(msg)
+				fmt.Printf("Other:%v\n", r)
+			}
 		}
 
 	}
@@ -111,6 +122,6 @@ func (s Server) handleClient(conn net.Conn) {
 }
 
 func main() {
-	s := Server{}
+	s := new(Server)
 	s.Init(1200)
 }
