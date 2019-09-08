@@ -14,6 +14,14 @@ import (
 	"github.com/google/uuid"
 )
 
+const (
+	HTTP_OK          = 200
+	HTTP_FORBIDDEN   = 403
+	HTTP_BADREQUEST  = 400
+	HTTP_ERROR       = 500
+	HTTP_UNAVAILABLE = 503
+)
+
 //Server - an instance of a termtexter server
 type Server struct {
 	db ttdb.DB
@@ -46,10 +54,6 @@ func (s Server) Init(port int) {
 }
 
 func (s Server) handleLogin(l proto.Login, p proto.Proto) {
-	log.Println(l.Type)
-	log.Println(l.Timestamp)
-	log.Println(l.Username)
-	log.Println(l.Password)
 	if l.Username == "" {
 		log.Println("Username cannot be an empty field.")
 		return
@@ -68,7 +72,7 @@ func (s Server) handleLogin(l proto.Login, p proto.Proto) {
 			uuid, err := uuid.NewRandom()
 			s.check(err)
 			// Add this key to the DB, so we can check with this for each message
-			err = s.db.AddClient(id, uuid.String())
+			err = s.db.AddSession(id, uuid.String())
 			s.check(err)
 			// Send the packet with the updates
 			err = p.SendLoginResponse(uuid.String())
@@ -93,6 +97,118 @@ func (s Server) handleMessage(m proto.Message, p proto.Proto) {
 	log.Println(m.Key)
 }
 
+func (s Server) handleRegistration(r proto.Register, p proto.Proto) {
+	//Make sure this username doesn't already exist
+	exists, err := s.db.UserExists(r.Username)
+	s.check(err)
+	if exists {
+		log.Println("Sorry, someone with this username already exists")
+		p.SendRegistrationResponse(HTTP_BADREQUEST)
+	} else {
+		//This username is not used, continue with the registration
+		err := s.db.Register(r.Username, r.Password)
+		s.check(err)
+		//Let them know how the registeration went
+		p.SendRegistrationResponse(HTTP_OK)
+	}
+}
+func (s Server) handleCreateRoom(cr proto.CreateRoomRequest, p proto.Proto) {
+	if cr.Room == "" {
+		log.Println("Room name cannot be empty")
+		return
+	}
+	if cr.Key == "" {
+		log.Println("Key cannot be empty")
+		return
+	}
+
+	//cr.Password can be left empty, if they don't want a password on their server
+
+	// Figure out what user is behind this key:
+	id, err := s.db.GetUserIDFromKey(cr.Key)
+	s.check(err)
+	if id == "" {
+		//They're not a person in the database
+		p.SendCreateRoomResponse(cr.Room, HTTP_FORBIDDEN)
+		return
+	}
+
+	//See if the room exists
+	res, err := s.db.DoesRoomExist(cr.Room)
+	s.check(err)
+
+	if res {
+		//The room exists...give them an error
+		p.SendCreateRoomResponse(cr.Room, HTTP_BADREQUEST)
+	} else {
+		//We can make the room, put the requester as an admin, and create a default channel
+		err := s.db.CreateRoom(cr.Room, id, cr.Password)
+		s.check(err)
+		//We did it all, tell them how it went
+		p.SendCreateRoomResponse(cr.Room, HTTP_OK)
+	}
+}
+
+func (s Server) handleJoinRoom(jr proto.JoinRoomRequest, p proto.Proto) {
+	if jr.Room == "" {
+		log.Println("Room name cannot be empty")
+		return
+	}
+	if jr.Key == "" {
+		log.Println("Key cannot be empty")
+		return
+	}
+
+	// Figure out what user is behind this key:
+	id, err := s.db.GetUserIDFromKey(jr.Key)
+	s.check(err)
+	if id == "" {
+		//They're not a person in the database
+		p.SendJoinRoomResponse(jr.Room, HTTP_FORBIDDEN)
+		return
+	}
+
+	//See if the room exists
+	res, err := s.db.DoesRoomExist(jr.Room)
+	s.check(err)
+	if res {
+		//This room does exist...
+		err = s.db.AddUserToRoom(id, jr.Room)
+		s.check(err)
+		if err == nil {
+			p.SendJoinRoomResponse(jr.Room, HTTP_OK)
+		}
+	} else {
+		//The room does not exist...send them a sad response
+		p.SendJoinRoomResponse(jr.Room, HTTP_BADREQUEST)
+	}
+
+}
+
+func (s Server) handleGetRooms(gr proto.GetRoomsRequest, p proto.Proto) {
+	if gr.Key == "" {
+		log.Println("Key cannot be empty")
+		return
+	}
+
+	// Figure out what user is behind this key:
+	id, err := s.db.GetUserIDFromKey(gr.Key)
+	s.check(err)
+	if id == "" {
+		//They're not a person in the database
+		p.SendGetRoomsResponse(HTTP_FORBIDDEN, nil)
+		return
+	}
+
+	//See what rooms this user is in
+	res, err := s.db.GetRooms(id)
+	s.check(err)
+
+	//Send them the list back
+	p.SendGetRoomsResponse(HTTP_OK, res)
+
+}
+
 func (s Server) handleClient(conn net.Conn) {
 	//defer conn.Close() // close connection before exit
 
@@ -106,6 +222,14 @@ func (s Server) handleClient(conn net.Conn) {
 			s.handleLogin(msg, p)
 		case proto.Message:
 			s.handleMessage(msg, p)
+		case proto.Register:
+			s.handleRegistration(msg, p)
+		case proto.JoinRoomRequest:
+			s.handleJoinRoom(msg, p)
+		case proto.CreateRoomRequest:
+			s.handleCreateRoom(msg, p)
+		case proto.GetRoomsRequest:
+			s.handleGetRooms(msg, p)
 		default:
 			if msg == nil {
 				log.Println("Somebody left")
