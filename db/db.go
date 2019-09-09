@@ -8,6 +8,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	//because I need the driver
+	proto "termtexter/proto"
+
 	_ "github.com/go-sql-driver/mysql"
 )
 
@@ -68,16 +70,27 @@ func (d DB) DoesRoomExist(rid string) (bool, error) {
 }
 
 //GetRooms -
-func (d DB) GetRooms(uid string) ([]string, error) {
-	rows, err := d.dbh.Query("select name from rooms r join room_users ru on r.room_id = ru.room_id join users u on u.user_id = ru.user_id where u.user_id = ?", uid)
+func (d DB) GetRooms(uid string) ([]proto.Room, error) {
+	rows, err := d.dbh.Query("select r.room_id, r.name, r.displayname from rooms r join room_users ru on r.room_id = ru.room_id join users u on u.user_id = ru.user_id where u.user_id = ?", uid)
 	check(err)
 	defer rows.Close()
-	rooms := make([]string, 0)
+	rooms := make([]proto.Room, 0)
+
 	for rows.Next() {
-		var temp string
-		rows.Scan(&temp)
-		rooms = append(rooms, temp)
+		room := proto.Room{}
+		rows.Scan(&room.ID, &room.Name, &room.DisplayName)
+		rooms = append(rooms, room)
 	}
+	for i := 0; i < len(rooms); i++ {
+		rows, err = d.dbh.Query("select c.channel_id, c.name from channels c join rooms r on c.room_id = r.room_id where c.room_id = ?", rooms[i].ID)
+		check(err)
+		for rows.Next() {
+			channel := proto.Channel{}
+			rows.Scan(&channel.ID, &channel.Name)
+			rooms[i].Channels = append(rooms[i].Channels, channel)
+		}
+	}
+
 	return rooms, err
 }
 

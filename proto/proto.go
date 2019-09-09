@@ -120,12 +120,26 @@ type GetRoomsRequest struct {
 	Key       string `json:"key"`
 }
 
+//Channel - Channel object
+type Channel struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+//Room - Room object
+type Room struct {
+	ID          int       `json:"id"`
+	Name        string    `json:"name"`
+	DisplayName string    `json:"displayname"`
+	Channels    []Channel `json:"channels"`
+}
+
 //GetRoomsResponse -
 type GetRoomsResponse struct {
-	Type      string   `json:"type"`
-	Timestamp int64    `json:"timestamp"`
-	Rooms     []string `json:"rooms"`
-	Code      int      `json:"code"`
+	Type      string `json:"type"`
+	Timestamp int64  `json:"timestamp"`
+	Rooms     []Room `json:"rooms"`
+	Code      int    `json:"code"`
 }
 
 // Proto - Main object to use. Has functions to interact with stuff
@@ -313,7 +327,7 @@ func (p Proto) SendGetRoomsRequest() error {
 }
 
 //SendGetRoomsResponse -
-func (p Proto) SendGetRoomsResponse(code int, rooms []string) error {
+func (p Proto) SendGetRoomsResponse(code int, rooms []Room) error {
 	grr := GetRoomsResponse{}
 	grr.Timestamp = time.Now().Unix()
 	grr.Rooms = rooms

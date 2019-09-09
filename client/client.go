@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"syscall"
 	proto "termtexter/proto"
 
@@ -24,9 +25,12 @@ const (
 
 //Client - client struct
 type Client struct {
-	conn  net.Conn
-	proto proto.Proto
-	rooms []string
+	conn     net.Conn
+	proto    proto.Proto
+	rooms    []proto.Room
+	curRoom  string
+	curChan  string
+	loggedIn bool
 }
 
 func (c Client) check(e error) {
@@ -150,6 +154,7 @@ func (c *Client) Login(username string, password string) int {
 		if ret.Code == 200 {
 			//Set our proto's session key
 			c.proto.SetKey(ret.Key)
+			c.loggedIn = true
 		} else {
 			log.Println("Not setting the session key because we got a bad return code...")
 		}
@@ -161,8 +166,13 @@ func (c *Client) Login(username string, password string) int {
 	return ret.Code
 }
 
+//UpdateRooms - updates the object's rooms struct value by using the return value of GetRooms
+func (c *Client) UpdateRooms() {
+	c.rooms = c.GetRooms()
+}
+
 //GetRooms - replaces the list of rooms in the object with what the database says
-func (c *Client) GetRooms() {
+func (c Client) GetRooms() []proto.Room {
 	err := c.proto.SendGetRoomsRequest()
 	c.check(err)
 	var ret proto.GetRoomsResponse
@@ -171,7 +181,7 @@ func (c *Client) GetRooms() {
 		ret = msg
 		if ret.Code == 200 {
 			//We got a good response...
-			c.rooms = msg.Rooms
+			//c.rooms = msg.Rooms
 		} else {
 			log.Println("Not updating the rooms because we got a bad return code...")
 		}
@@ -180,30 +190,88 @@ func (c *Client) GetRooms() {
 		fmt.Printf("Unexpected type:%v\n", r)
 		os.Exit(1)
 	}
-	return
+	return ret.Rooms
+}
+
+//PrintRooms - Nicely prints all the rooms provided
+func (c Client) PrintRooms(rooms []proto.Room) {
+	if !c.loggedIn {
+		fmt.Println("You are not logged in")
+	}
+	for i := 0; i < len(rooms); i++ {
+		fmt.Println("Room index:", i)
+		fmt.Println("\tID:", rooms[i].ID)
+		fmt.Println("\tName:", rooms[i].Name)
+		fmt.Println("\tDisplay Name:", rooms[i].DisplayName)
+		fmt.Println("\tChannels:")
+		for j := 0; j < len(rooms[i].Channels); j++ {
+			fmt.Println("\t\tID:", rooms[i].Channels[j].ID)
+			fmt.Println("\t\tName:", rooms[i].Channels[j].Name)
+		}
+	}
+}
+
+//HandleUserInput - A dumb CLI to interface with the program
+func (c *Client) HandleUserInput() {
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		prompt := "$"
+		if c.curRoom != "" {
+			prompt += "(" + c.curRoom
+		}
+		if c.curChan != "" {
+			prompt += ":" + c.curChan
+		}
+		if c.curRoom != "" || c.curChan != "" {
+			prompt += ")"
+		}
+
+		fmt.Print(prompt)
+		action, err := reader.ReadString('\n')
+		action = strings.TrimRight(action, "\r\n")
+		c.check(err)
+		if action == "show rooms" {
+			c.UpdateRooms()
+			c.PrintRooms(c.rooms)
+		} else if action == "help" {
+			fmt.Println("help:\tthis screen")
+			fmt.Println("show rooms:\tprint rooms")
+			fmt.Println("use room <ID>:\tswitches focus to a specific room")
+			fmt.Println("use channel <ID>:\tswitches to a specific channel")
+			fmt.Println("join room <name,passwd>:\tlinks your account with a room")
+			fmt.Println("create room <name,passwd>:\tcreate a new room. automatically adds you as an admin and creates a default channel")
+		} else if action == "login" {
+			if c.Login("Justin", "poop") == 200 {
+				c.UpdateRooms()
+			} else {
+				fmt.Println("Something went wrong when logging in")
+			}
+		} else if len(strings.Fields(action)) > 2 && strings.Fields(action)[0] == "use" && strings.Fields(action)[1] == "room" {
+			c.curRoom = strings.Fields(action)[2]
+			c.check(err)
+		} else if len(strings.Fields(action)) > 2 && strings.Fields(action)[0] == "use" && strings.Fields(action)[1] == "channel" {
+			if c.curRoom == "" {
+				fmt.Println("You must set a room before you can set a channel")
+			} else {
+				c.curChan = strings.Fields(action)[2]
+				c.check(err)
+			}
+		} else if len(strings.Fields(action)) > 3 && strings.Fields(action)[0] == "create" && strings.Fields(action)[1] == "room" {
+			rname := strings.Fields(action)[2]
+			rpass := strings.Fields(action)[3]
+			c.CreateRoom(rname, rpass)
+		} else if len(strings.Fields(action)) > 3 && strings.Fields(action)[0] == "join" && strings.Fields(action)[1] == "room" {
+			jname := strings.Fields(action)[2]
+			jpass := strings.Fields(action)[3]
+			c.JoinRoom(jname, jpass)
+		}
+	}
+
 }
 
 func main() {
 	c := new(Client)
 	c.Init("localhost", 1200)
 	//username, password := c.GetCredentials()
-
-	// c.SendRegistration("justin", "poop")
-	// r := c.GetRegistrationResponse()
-	// log.Println(r)
-
-	if c.Login("Justin", "password") == 200 {
-		//We got a good response, we are logged in and the session key is set in the proto object.
-		//We don't have to worry about it as a coder here
-
-		//Create a room
-		//if c.CreateRoom("aroom", "test") == 200 {
-		//	log.Println("Room was made")
-		//}
-
-		c.GetRooms()
-		log.Println(c.rooms)
-	} else {
-		log.Println("Something went wrong logging in. Check your username and password.")
-	}
+	c.HandleUserInput()
 }

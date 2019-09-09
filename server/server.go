@@ -56,10 +56,12 @@ func (s Server) Init(port int) {
 func (s Server) handleLogin(l proto.Login, p proto.Proto) {
 	if l.Username == "" {
 		log.Println("Username cannot be an empty field.")
+		p.SendBadLoginResponse()
 		return
 	}
 	if l.Password == "" {
 		log.Println("Password cannot be an empty field.")
+		p.SendBadLoginResponse()
 		return
 	}
 
@@ -115,10 +117,12 @@ func (s Server) handleRegistration(r proto.Register, p proto.Proto) {
 func (s Server) handleCreateRoom(cr proto.CreateRoomRequest, p proto.Proto) {
 	if cr.Room == "" {
 		log.Println("Room name cannot be empty")
+		p.SendCreateRoomResponse(cr.Room, HTTP_ERROR)
 		return
 	}
 	if cr.Key == "" {
 		log.Println("Key cannot be empty")
+		p.SendCreateRoomResponse(cr.Room, HTTP_ERROR)
 		return
 	}
 
@@ -188,6 +192,7 @@ func (s Server) handleJoinRoom(jr proto.JoinRoomRequest, p proto.Proto) {
 func (s Server) handleGetRooms(gr proto.GetRoomsRequest, p proto.Proto) {
 	if gr.Key == "" {
 		log.Println("Key cannot be empty")
+		p.SendGetRoomsResponse(HTTP_FORBIDDEN, nil)
 		return
 	}
 
