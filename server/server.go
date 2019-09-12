@@ -189,6 +189,31 @@ func (s Server) handleJoinRoom(jr proto.JoinRoomRequest, p proto.Proto) {
 
 }
 
+func (s Server) handleGetMessages(gm proto.GetMessagesRequest, p proto.Proto) {
+	if gm.Key == "" {
+		log.Println("Key cannot be empty")
+		p.SendGetMessagesResponse(HTTP_FORBIDDEN, nil)
+		return
+	}
+
+	// Figure out what user is behind this key:
+	id, err := s.db.GetUserIDFromKey(gm.Key)
+	s.check(err)
+	if id == "" {
+		//They're not a person in the database
+		p.SendGetMessagesResponse(HTTP_FORBIDDEN, nil)
+		return
+	}
+
+	//See what messages this room has
+	res, err := s.db.GetMessages(gm.Room, gm.Channel)
+	s.check(err)
+
+	//Send them the list back
+	p.SendGetMessagesResponse(HTTP_OK, res)
+
+}
+
 func (s Server) handleGetRooms(gr proto.GetRoomsRequest, p proto.Proto) {
 	if gr.Key == "" {
 		log.Println("Key cannot be empty")
@@ -235,6 +260,8 @@ func (s Server) handleClient(conn net.Conn) {
 			s.handleCreateRoom(msg, p)
 		case proto.GetRoomsRequest:
 			s.handleGetRooms(msg, p)
+		case proto.GetMessagesRequest:
+			s.handleGetMessages(msg, p)
 		default:
 			if msg == nil {
 				log.Println("Somebody left")

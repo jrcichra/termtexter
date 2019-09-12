@@ -69,25 +69,46 @@ func (d DB) DoesRoomExist(rid string) (bool, error) {
 	return b, err
 }
 
-//GetRooms -
-func (d DB) GetRooms(uid string) ([]proto.Room, error) {
-	rows, err := d.dbh.Query("select r.room_id, r.name, r.displayname from rooms r join room_users ru on r.room_id = ru.room_id join users u on u.user_id = ru.user_id where u.user_id = ?", uid)
+//GetMessages -
+func (d DB) GetMessages(room int, channel int) (map[int]*proto.Message, error) {
+	rows, err := d.dbh.Query(`select message_id, user_id, message, created, received from messages m join channels c
+	on m.channel_id = c.channel_id join rooms r on r.room_id = c.room_id where r.room_id = ? and c.channel_id = ?`, room, channel)
 	check(err)
 	defer rows.Close()
-	rooms := make([]proto.Room, 0)
+
+	messages := make(map[int]*proto.Message)
+
+	for rows.Next() {
+		message := proto.Message{}
+		rows.Scan(&message.ID, &message.UserID, &message.Message, &message.Created, &message.Received)
+		messages[message.ID] = &message
+	}
+
+	return messages, err
+}
+
+//GetRooms -
+func (d DB) GetRooms(uid string) (map[int]*proto.Room, error) {
+	rows, err := d.dbh.Query(`select r.room_id, r.name, r.displayname from rooms r join room_users ru on r.room_id = ru.room_id 
+	join users u on u.user_id = ru.user_id where u.user_id = ?`, uid)
+	check(err)
+	defer rows.Close()
+	rooms := make(map[int]*proto.Room)
 
 	for rows.Next() {
 		room := proto.Room{}
 		rows.Scan(&room.ID, &room.Name, &room.DisplayName)
-		rooms = append(rooms, room)
+		rooms[room.ID] = &room
 	}
-	for i := 0; i < len(rooms); i++ {
-		rows, err = d.dbh.Query("select c.channel_id, c.name from channels c join rooms r on c.room_id = r.room_id where c.room_id = ?", rooms[i].ID)
+
+	for k := range rooms {
+		rows, err = d.dbh.Query("select c.channel_id, c.name from channels c join rooms r on c.room_id = r.room_id where c.room_id = ?", k)
 		check(err)
 		for rows.Next() {
 			channel := proto.Channel{}
 			rows.Scan(&channel.ID, &channel.Name)
-			rooms[i].Channels = append(rooms[i].Channels, channel)
+			rooms[k].Channels = make(map[int]*proto.Channel)
+			rooms[k].Channels[channel.ID] = &channel
 		}
 	}
 

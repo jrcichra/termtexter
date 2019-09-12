@@ -27,9 +27,9 @@ const (
 type Client struct {
 	conn     net.Conn
 	proto    proto.Proto
-	rooms    []proto.Room
-	curRoom  string
-	curChan  string
+	rooms    map[int]*proto.Room
+	curRoom  int
+	curChan  int
 	loggedIn bool
 }
 
@@ -172,7 +172,7 @@ func (c *Client) UpdateRooms() {
 }
 
 //GetRooms - replaces the list of rooms in the object with what the database says
-func (c Client) GetRooms() []proto.Room {
+func (c Client) GetRooms() map[int]*proto.Room {
 	err := c.proto.SendGetRoomsRequest()
 	c.check(err)
 	var ret proto.GetRoomsResponse
@@ -194,19 +194,65 @@ func (c Client) GetRooms() []proto.Room {
 }
 
 //PrintRooms - Nicely prints all the rooms provided
-func (c Client) PrintRooms(rooms []proto.Room) {
+func (c Client) PrintRooms() {
 	if !c.loggedIn {
 		fmt.Println("You are not logged in")
 	}
-	for i := 0; i < len(rooms); i++ {
-		fmt.Println("Room index:", i)
-		fmt.Println("\tID:", rooms[i].ID)
-		fmt.Println("\tName:", rooms[i].Name)
-		fmt.Println("\tDisplay Name:", rooms[i].DisplayName)
+	for _, v := range c.rooms {
+		fmt.Println("\tID:", v.ID) //could also use k
+		fmt.Println("\tName:", v.Name)
+		fmt.Println("\tDisplay Name:", v.DisplayName)
 		fmt.Println("\tChannels:")
-		for j := 0; j < len(rooms[i].Channels); j++ {
-			fmt.Println("\t\tID:", rooms[i].Channels[j].ID)
-			fmt.Println("\t\tName:", rooms[i].Channels[j].Name)
+		for _, v2 := range v.Channels {
+			fmt.Println("\t\tID:", v2.ID)
+			fmt.Println("\t\tName:", v2.Name)
+		}
+	}
+}
+
+//UpdateMessages - Queries the database and gets the last N messages from the DB for the channel we are currently on
+func (c *Client) UpdateMessages() {
+	c.rooms[c.curRoom].Channels[c.curChan].Messages = c.GetMessages(c.curRoom, c.curChan)
+}
+
+//GetMessages - Queries the database and gets the last N messages from the DB for the channel we are currently on
+func (c *Client) GetMessages(room int, channel int) map[int]*proto.Message {
+	if room == -1 || channel == -1 {
+		fmt.Println("Please set your channel and room before requesting messages.")
+		empty := make(map[int]*proto.Message)
+		return empty
+	}
+	err := c.proto.SendGetMessagesRequest(room, channel)
+	c.check(err)
+	var ret proto.GetMessagesResponse
+	switch msg := c.proto.Decode().(type) {
+	case proto.GetMessagesResponse:
+		ret = msg
+		if ret.Code == 200 {
+			//We got a good response...
+			//c.rooms = msg.Rooms
+		} else {
+			log.Println("Not updating the rooms because we got a bad return code...")
+		}
+	default:
+		r := reflect.TypeOf(msg)
+		fmt.Printf("Unexpected type:%v\n", r)
+		os.Exit(1)
+	}
+	return ret.Messages
+}
+
+//PrintMessages - Queries the database and gets the last N messages from the DB for the channel we are currently on
+func (c *Client) PrintMessages() {
+	if !c.loggedIn {
+		fmt.Println("You are not logged in")
+	}
+	if len(c.rooms[c.curRoom].Channels[c.curChan].Messages) <= 0 {
+		fmt.Println("There are no messages in this channel.")
+	} else {
+		for k, v := range c.rooms[c.curRoom].Channels[c.curChan].Messages {
+			fmt.Println("k", k)
+			fmt.Println("v", v)
 		}
 	}
 }
@@ -216,13 +262,13 @@ func (c *Client) HandleUserInput() {
 	reader := bufio.NewReader(os.Stdin)
 	for {
 		prompt := "$"
-		if c.curRoom != "" {
-			prompt += "(" + c.curRoom
+		if c.curRoom != -1 {
+			prompt += "(" + strconv.Itoa(c.curRoom)
 		}
-		if c.curChan != "" {
-			prompt += ":" + c.curChan
+		if c.curChan != -1 {
+			prompt += ":" + strconv.Itoa(c.curChan)
 		}
-		if c.curRoom != "" || c.curChan != "" {
+		if c.curRoom != -1 || c.curChan != -1 {
 			prompt += ")"
 		}
 
@@ -232,7 +278,10 @@ func (c *Client) HandleUserInput() {
 		c.check(err)
 		if action == "show rooms" {
 			c.UpdateRooms()
-			c.PrintRooms(c.rooms)
+			c.PrintRooms()
+		} else if action == "show messages" {
+			c.UpdateMessages()
+			c.PrintMessages()
 		} else if action == "help" {
 			fmt.Println("help:\tthis screen")
 			fmt.Println("show rooms:\tprint rooms")
@@ -247,13 +296,13 @@ func (c *Client) HandleUserInput() {
 				fmt.Println("Something went wrong when logging in")
 			}
 		} else if len(strings.Fields(action)) > 2 && strings.Fields(action)[0] == "use" && strings.Fields(action)[1] == "room" {
-			c.curRoom = strings.Fields(action)[2]
+			c.curRoom, err = strconv.Atoi(strings.Fields(action)[2])
 			c.check(err)
 		} else if len(strings.Fields(action)) > 2 && strings.Fields(action)[0] == "use" && strings.Fields(action)[1] == "channel" {
-			if c.curRoom == "" {
+			if c.curRoom == -1 {
 				fmt.Println("You must set a room before you can set a channel")
 			} else {
-				c.curChan = strings.Fields(action)[2]
+				c.curChan, err = strconv.Atoi(strings.Fields(action)[2])
 				c.check(err)
 			}
 		} else if len(strings.Fields(action)) > 3 && strings.Fields(action)[0] == "create" && strings.Fields(action)[1] == "room" {
@@ -264,6 +313,8 @@ func (c *Client) HandleUserInput() {
 			jname := strings.Fields(action)[2]
 			jpass := strings.Fields(action)[3]
 			c.JoinRoom(jname, jpass)
+		} else {
+			fmt.Println("Unknown command:", action)
 		}
 	}
 
@@ -271,6 +322,8 @@ func (c *Client) HandleUserInput() {
 
 func main() {
 	c := new(Client)
+	c.curChan = -1
+	c.curRoom = -1
 	c.Init("localhost", 1200)
 	//username, password := c.GetCredentials()
 	c.HandleUserInput()

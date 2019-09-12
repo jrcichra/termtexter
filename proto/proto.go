@@ -9,22 +9,24 @@ import (
 )
 
 const (
-	LOGIN              = "login"
-	JOINROOM           = "joinroom"
-	REGISTER_RESPONSE  = "register-response"
-	REGISTER           = "register"
-	LOGIN_RESPONSE     = "login-response"
-	MESSAGE            = "message"
-	JOINROOMRESPONSE   = "joinroom-response"
-	CREATEROOM         = "createroom"
-	CREATEROOMRESPONSE = "createroom-response"
-	GETROOMS           = "getrooms"
-	GETROOMSRESPONSE   = "getrooms-response"
-	HTTP_OK            = 200
-	HTTP_FORBIDDEN     = 403
-	HTTP_BADREQUEST    = 400
-	HTTP_ERROR         = 500
-	HTTP_UNAVAILABLE   = 503
+	LOGIN               = "login"
+	JOINROOM            = "joinroom"
+	REGISTER_RESPONSE   = "register-response"
+	REGISTER            = "register"
+	LOGIN_RESPONSE      = "login-response"
+	MESSAGE             = "message"
+	JOINROOMRESPONSE    = "joinroom-response"
+	CREATEROOM          = "createroom"
+	CREATEROOMRESPONSE  = "createroom-response"
+	GETROOMS            = "getrooms"
+	GETROOMSRESPONSE    = "getrooms-response"
+	GETMESSAGES         = "getmessages"
+	GETMESSAGESRESPONSE = "getmessages-response"
+	HTTP_OK             = 200
+	HTTP_FORBIDDEN      = 403
+	HTTP_BADREQUEST     = 400
+	HTTP_ERROR          = 500
+	HTTP_UNAVAILABLE    = 503
 )
 
 //Type - Only gets the type from the decoder
@@ -74,10 +76,19 @@ type MessageResponse struct {
 
 //Message - Object for a message
 type Message struct {
+	ID        int    `json:"id"`
+	UserID    int    `json:"user_id"`
 	Type      string `json:"type"`
 	Timestamp int64  `json:"timestamp"`
 	Message   string `json:"message"`
 	Key       string `json:"key"`
+	Created   int    `json:"created"`
+	Received  int    `json:"received"`
+}
+
+//MessageOrder - array of message IDs
+type MessageOrder struct {
+	IDS []int
 }
 
 //JoinRoomRequest - Packet representing a room request
@@ -122,30 +133,83 @@ type GetRoomsRequest struct {
 
 //Channel - Channel object
 type Channel struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
+	ID       int              `json:"id"`
+	Name     string           `json:"name"`
+	Messages map[int]*Message `json:"messages"`
 }
 
 //Room - Room object
 type Room struct {
-	ID          int       `json:"id"`
-	Name        string    `json:"name"`
-	DisplayName string    `json:"displayname"`
-	Channels    []Channel `json:"channels"`
+	ID          int              `json:"id"`
+	Name        string           `json:"name"`
+	DisplayName string           `json:"displayname"`
+	Channels    map[int]*Channel `json:"channels"`
 }
 
 //GetRoomsResponse -
 type GetRoomsResponse struct {
+	Type      string        `json:"type"`
+	Timestamp int64         `json:"timestamp"`
+	Rooms     map[int]*Room `json:"rooms"`
+	Code      int           `json:"code"`
+}
+
+//GetMessagesResponse -
+type GetMessagesResponse struct {
+	Type      string           `json:"type"`
+	Timestamp int64            `json:"timestamp"`
+	Messages  map[int]*Message `json:"messages"`
+	Code      int              `json:"code"`
+}
+
+//GetMessagesRequest -
+type GetMessagesRequest struct {
 	Type      string `json:"type"`
 	Timestamp int64  `json:"timestamp"`
-	Rooms     []Room `json:"rooms"`
-	Code      int    `json:"code"`
+	Key       string `json:"key"`
+	Room      int    `json:"room"`
+	Channel   int    `json:"channel"`
 }
 
 // Proto - Main object to use. Has functions to interact with stuff
 type Proto struct {
 	Conn net.Conn
 	key  string
+}
+
+//SendGetMessagesRequest -sends a request to get messages for a specific channel
+func (p *Proto) SendGetMessagesRequest(room int, channel int) error {
+	mr := GetMessagesRequest{}
+	mr.Timestamp = time.Now().Unix()
+	mr.Room = room
+	mr.Channel = channel
+	mr.Type = GETMESSAGES
+	mr.Key = p.key
+	j, err := json.Marshal(mr)
+	if err != nil {
+		return err
+	}
+	//TODO compress into one call
+	p.Conn.Write([]byte(j))
+	p.Conn.Write([]byte("\n"))
+	return nil
+}
+
+//SendGetMessagesResponse - sends a response to a getmessages request
+func (p *Proto) SendGetMessagesResponse(c int, m map[int]*Message) error {
+	gmr := GetMessagesResponse{}
+	gmr.Timestamp = time.Now().Unix()
+	gmr.Type = GETMESSAGESRESPONSE
+	gmr.Messages = m
+	gmr.Code = c
+	j, err := json.Marshal(gmr)
+	if err != nil {
+		return err
+	}
+	//TODO compress into one call
+	p.Conn.Write([]byte(j))
+	p.Conn.Write([]byte("\n"))
+	return nil
 }
 
 // SendJoinRoom -  sends a request to join a room
@@ -327,7 +391,7 @@ func (p Proto) SendGetRoomsRequest() error {
 }
 
 //SendGetRoomsResponse -
-func (p Proto) SendGetRoomsResponse(code int, rooms []Room) error {
+func (p Proto) SendGetRoomsResponse(code int, rooms map[int]*Room) error {
 	grr := GetRoomsResponse{}
 	grr.Timestamp = time.Now().Unix()
 	grr.Rooms = rooms
@@ -411,6 +475,16 @@ func (p Proto) Decode() interface{} {
 		err := json.Unmarshal(text, &grr)
 		check(err)
 		return grr
+	} else if a.Type == GETMESSAGES {
+		var gmr GetMessagesRequest
+		err := json.Unmarshal(text, &gmr)
+		check(err)
+		return gmr
+	} else if a.Type == GETMESSAGESRESPONSE {
+		var gmr GetMessagesResponse
+		err := json.Unmarshal(text, &gmr)
+		check(err)
+		return gmr
 	}
 	return nil
 }
