@@ -28,8 +28,8 @@ CREATE TABLE `messages` (
   `user_id` int(11) NOT NULL,
   `channel_id` int(11) NOT NULL,
   `message` text DEFAULT NULL,
-  `created` datetime NOT NULL,
-  `received` datetime NOT NULL DEFAULT current_timestamp(),
+  `created` timestamp NOT NULL,
+  `received` timestamp NOT NULL DEFAULT current_timestamp(),
   PRIMARY KEY (`message_id`),
   KEY `user_id` (`user_id`),
   KEY `channel_id` (`channel_id`),
@@ -99,7 +99,7 @@ CREATE TABLE `sessions` (
   `session_id` int(11) NOT NULL AUTO_INCREMENT,
   `user_id` int(11) NOT NULL,
   `key` varchar(2000) NOT NULL,
-  `created` datetime NOT NULL DEFAULT current_timestamp(),
+  `created` timestamp NOT NULL DEFAULT current_timestamp(),
   PRIMARY KEY (`session_id`),
   KEY `user_id` (`user_id`),
   CONSTRAINT `sessions_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`)
@@ -120,7 +120,7 @@ CREATE TABLE `users` (
   `user_id` int(11) NOT NULL AUTO_INCREMENT,
   `username` varchar(200) NOT NULL,
   `password` varchar(200) NOT NULL,
-  `created` datetime NOT NULL DEFAULT current_timestamp(),
+  `created` timestamp NOT NULL DEFAULT current_timestamp(),
   `displayname` varchar(100) NOT NULL DEFAULT `username`,
   PRIMARY KEY (`user_id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=latin1;

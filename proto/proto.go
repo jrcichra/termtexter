@@ -76,14 +76,14 @@ type MessageResponse struct {
 
 //Message - Object for a message
 type Message struct {
-	ID        int    `json:"id"`
-	UserID    int    `json:"user_id"`
-	Type      string `json:"type"`
-	Timestamp int64  `json:"timestamp"`
-	Message   string `json:"message"`
-	Key       string `json:"key"`
-	Created   int    `json:"created"`
-	Received  int    `json:"received"`
+	ID        int       `json:"id"`
+	UserID    int       `json:"user_id"`
+	Type      string    `json:"type"`
+	Timestamp int64     `json:"timestamp"`
+	Message   string    `json:"message"`
+	Key       string    `json:"key"`
+	Created   time.Time `json:"created"`
+	Received  time.Time `json:"received"`
 }
 
 //MessageOrder - array of message IDs
@@ -144,6 +144,15 @@ type Room struct {
 	Name        string           `json:"name"`
 	DisplayName string           `json:"displayname"`
 	Channels    map[int]*Channel `json:"channels"`
+	Users       map[int]*User    `json:"users"`
+}
+
+//User - represents a user
+type User struct {
+	ID          int       `json:"id"`
+	UserName    string    `json:"username"`
+	DisplayName string    `json:"displayname"`
+	Created     time.Time `json:"created"`
 }
 
 //GetRoomsResponse -

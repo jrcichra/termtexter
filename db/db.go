@@ -36,7 +36,7 @@ func check(e error) {
 func (d *DB) Connect(hostname string, password string) error {
 	// connect to the database
 	var err error
-	d.dbh, err = sql.Open("mysql", "termtexter:"+password+"@tcp("+hostname+")/termtexter")
+	d.dbh, err = sql.Open("mysql", "termtexter:"+password+"@tcp("+hostname+")/termtexter?parseTime=true")
 	return err
 }
 
@@ -71,17 +71,17 @@ func (d DB) DoesRoomExist(rid string) (bool, error) {
 
 //GetMessages -
 func (d DB) GetMessages(room int, channel int) (map[int]*proto.Message, error) {
-	rows, err := d.dbh.Query(`select message_id, user_id, message, created, received from messages m join channels c
+	rows, err := d.dbh.Query(`select m.message_id, m.user_id, m.message, m.created, m.received from messages m join channels c
 	on m.channel_id = c.channel_id join rooms r on r.room_id = c.room_id where r.room_id = ? and c.channel_id = ?`, room, channel)
 	check(err)
 	defer rows.Close()
 
 	messages := make(map[int]*proto.Message)
-
 	for rows.Next() {
 		message := proto.Message{}
 		rows.Scan(&message.ID, &message.UserID, &message.Message, &message.Created, &message.Received)
 		messages[message.ID] = &message
+		log.Println(message)
 	}
 
 	return messages, err
@@ -102,6 +102,8 @@ func (d DB) GetRooms(uid string) (map[int]*proto.Room, error) {
 	}
 
 	for k := range rooms {
+
+		//Channels
 		rows, err = d.dbh.Query("select c.channel_id, c.name from channels c join rooms r on c.room_id = r.room_id where c.room_id = ?", k)
 		check(err)
 		for rows.Next() {
@@ -109,6 +111,16 @@ func (d DB) GetRooms(uid string) (map[int]*proto.Room, error) {
 			rows.Scan(&channel.ID, &channel.Name)
 			rooms[k].Channels = make(map[int]*proto.Channel)
 			rooms[k].Channels[channel.ID] = &channel
+		}
+
+		//Users
+		rows, err = d.dbh.Query("select u.user_id,u.username,u.created,u.displayname from users u join room_users ru on u.user_id = ru.user_id join rooms r on ru.room_id = r.room_id where r.room_id = ?", k)
+		check(err)
+		for rows.Next() {
+			user := proto.User{}
+			rows.Scan(&user.ID, &user.UserName, &user.Created, &user.DisplayName)
+			rooms[k].Users = make(map[int]*proto.User)
+			rooms[k].Users[user.ID] = &user
 		}
 	}
 

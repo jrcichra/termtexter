@@ -250,9 +250,8 @@ func (c *Client) PrintMessages() {
 	if len(c.rooms[c.curRoom].Channels[c.curChan].Messages) <= 0 {
 		fmt.Println("There are no messages in this channel.")
 	} else {
-		for k, v := range c.rooms[c.curRoom].Channels[c.curChan].Messages {
-			fmt.Println("k", k)
-			fmt.Println("v", v)
+		for _, v := range c.rooms[c.curRoom].Channels[c.curChan].Messages {
+			fmt.Println(v.Created, c.rooms[c.curRoom].Users[v.UserID].DisplayName, v.Message)
 		}
 	}
 }
@@ -280,11 +279,16 @@ func (c *Client) HandleUserInput() {
 			c.UpdateRooms()
 			c.PrintRooms()
 		} else if action == "show messages" {
-			c.UpdateMessages()
-			c.PrintMessages()
+			if c.curRoom == -1 || c.curChan == -1 {
+				fmt.Println("You must select a channel and room first.")
+			} else {
+				c.UpdateMessages()
+				c.PrintMessages()
+			}
 		} else if action == "help" {
 			fmt.Println("help:\tthis screen")
 			fmt.Println("show rooms:\tprint rooms")
+			fmt.Println("show messages:\tprint messages in current room and channel")
 			fmt.Println("use room <ID>:\tswitches focus to a specific room")
 			fmt.Println("use channel <ID>:\tswitches to a specific channel")
 			fmt.Println("join room <name,passwd>:\tlinks your account with a room")
