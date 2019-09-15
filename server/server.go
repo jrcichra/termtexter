@@ -189,6 +189,29 @@ func (s Server) handleJoinRoom(jr proto.JoinRoomRequest, p proto.Proto) {
 
 }
 
+func (s Server) handlePostMessage(pm proto.PostMessageRequest, p proto.Proto) {
+	if pm.Key == "" {
+		log.Println("Key cannot be empty")
+		p.SendPostMessageResponse(HTTP_FORBIDDEN)
+		return
+	}
+
+	// Figure out what user is behind this key:
+	id, err := s.db.GetUserIDFromKey(pm.Key)
+	s.check(err)
+	if id == "" {
+		//They're not a person in the database
+		p.SendPostMessageResponse(HTTP_FORBIDDEN)
+		return
+	}
+
+	//try to insert the message in the proper place
+	err = s.db.PostMessage(id, pm)
+
+	p.SendPostMessageResponse(HTTP_OK)
+
+}
+
 func (s Server) handleGetMessages(gm proto.GetMessagesRequest, p proto.Proto) {
 	if gm.Key == "" {
 		log.Println("Key cannot be empty")
@@ -262,6 +285,8 @@ func (s Server) handleClient(conn net.Conn) {
 			s.handleGetRooms(msg, p)
 		case proto.GetMessagesRequest:
 			s.handleGetMessages(msg, p)
+		case proto.PostMessageRequest:
+			s.handlePostMessage(msg, p)
 		default:
 			if msg == nil {
 				log.Println("Somebody left")

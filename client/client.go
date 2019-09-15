@@ -210,6 +210,30 @@ func (c Client) PrintRooms() {
 	}
 }
 
+func (c *Client) sendMessage(msg string, room int, channel int) error {
+	if room == -1 || channel == -1 {
+		fmt.Println("Please set your channel and room before sending a message.")
+		return nil
+	}
+	err := c.proto.SendPostMessageRequest(msg, room, channel)
+	c.check(err)
+	var ret proto.PostMessageResponse
+	switch msg := c.proto.Decode().(type) {
+	case proto.PostMessageResponse:
+		ret = msg
+		if ret.Code == 200 {
+			//We got a good response...
+		} else {
+			log.Println("We got a bad return code...")
+		}
+	default:
+		r := reflect.TypeOf(msg)
+		fmt.Printf("Unexpected type:%v\n", r)
+		os.Exit(1)
+	}
+	return err
+}
+
 //UpdateMessages - Queries the database and gets the last N messages from the DB for the channel we are currently on
 func (c *Client) UpdateMessages() {
 	c.rooms[c.curRoom].Channels[c.curChan].Messages = c.GetMessages(c.curRoom, c.curChan)
@@ -251,7 +275,7 @@ func (c *Client) PrintMessages() {
 		fmt.Println("There are no messages in this channel.")
 	} else {
 		for _, v := range c.rooms[c.curRoom].Channels[c.curChan].Messages {
-			fmt.Println(v.Created, c.rooms[c.curRoom].Users[v.UserID].DisplayName, v.Message)
+			fmt.Println(v.Created, c.rooms[c.curRoom].Users[v.UserID].DisplayName, "<", v.Message, ">")
 		}
 	}
 }
@@ -289,10 +313,23 @@ func (c *Client) HandleUserInput() {
 			fmt.Println("help:\tthis screen")
 			fmt.Println("show rooms:\tprint rooms")
 			fmt.Println("show messages:\tprint messages in current room and channel")
+			fmt.Println("send :\tThe next inputted line will be sent to your current room & channel")
 			fmt.Println("use room <ID>:\tswitches focus to a specific room")
 			fmt.Println("use channel <ID>:\tswitches to a specific channel")
 			fmt.Println("join room <name,passwd>:\tlinks your account with a room")
 			fmt.Println("create room <name,passwd>:\tcreate a new room. automatically adds you as an admin and creates a default channel")
+		} else if action == "send" {
+			if c.curRoom == -1 || c.curChan == -1 {
+				fmt.Println("You must select a channel and room first.")
+			} else {
+				//wait for a message
+				fmt.Print(prompt + "#")
+				msg, err := reader.ReadString('\n')
+				msg = strings.TrimRight(msg, "\r\n")
+				c.check(err)
+				//send that message to the server
+				c.sendMessage(msg, c.curRoom, c.curChan)
+			}
 		} else if action == "login" {
 			if c.Login("Justin", "poop") == 200 {
 				c.UpdateRooms()
@@ -326,8 +363,8 @@ func (c *Client) HandleUserInput() {
 
 func main() {
 	c := new(Client)
-	c.curChan = -1
-	c.curRoom = -1
+	c.curRoom = 3
+	c.curChan = 1
 	c.Init("localhost", 1200)
 	//username, password := c.GetCredentials()
 	c.HandleUserInput()

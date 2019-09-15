@@ -22,6 +22,8 @@ const (
 	GETROOMSRESPONSE    = "getrooms-response"
 	GETMESSAGES         = "getmessages"
 	GETMESSAGESRESPONSE = "getmessages-response"
+	POSTMESSAGE         = "postmessage"
+	POSTMESSAGERESPONSE = "postmessage-response"
 	HTTP_OK             = 200
 	HTTP_FORBIDDEN      = 403
 	HTTP_BADREQUEST     = 400
@@ -184,6 +186,58 @@ type GetMessagesRequest struct {
 type Proto struct {
 	Conn net.Conn
 	key  string
+}
+
+//PostMessageRequest -
+type PostMessageRequest struct {
+	Type      string `json:"type"`
+	Timestamp int64  `json:"timestamp"`
+	Key       string `json:"key"`
+	Room      int    `json:"room"`
+	Channel   int    `json:"channel"`
+	Message   string `json:"message"`
+}
+
+//PostMessageResponse -
+type PostMessageResponse struct {
+	Type      string `json:"type"`
+	Timestamp int64  `json:"timestamp"`
+	Code      int    `json:"code"`
+}
+
+//SendPostMessageRequest -
+func (p *Proto) SendPostMessageRequest(msg string, room int, channel int) error {
+	pmr := PostMessageRequest{}
+	pmr.Timestamp = time.Now().Unix()
+	pmr.Room = room
+	pmr.Channel = channel
+	pmr.Type = POSTMESSAGE
+	pmr.Key = p.key
+	pmr.Message = msg
+	j, err := json.Marshal(pmr)
+	if err != nil {
+		return err
+	}
+	//TODO compress into one call
+	p.Conn.Write([]byte(j))
+	p.Conn.Write([]byte("\n"))
+	return nil
+}
+
+//SendPostMessageResponse -
+func (p *Proto) SendPostMessageResponse(c int) error {
+	pmr := PostMessageResponse{}
+	pmr.Timestamp = time.Now().Unix()
+	pmr.Type = POSTMESSAGERESPONSE
+	pmr.Code = c
+	j, err := json.Marshal(pmr)
+	if err != nil {
+		return err
+	}
+	//TODO compress into one call
+	p.Conn.Write([]byte(j))
+	p.Conn.Write([]byte("\n"))
+	return nil
 }
 
 //SendGetMessagesRequest -sends a request to get messages for a specific channel
@@ -494,6 +548,16 @@ func (p Proto) Decode() interface{} {
 		err := json.Unmarshal(text, &gmr)
 		check(err)
 		return gmr
+	} else if a.Type == POSTMESSAGE {
+		var pmr PostMessageRequest
+		err := json.Unmarshal(text, &pmr)
+		check(err)
+		return pmr
+	} else if a.Type == POSTMESSAGERESPONSE {
+		var pmr PostMessageResponse
+		err := json.Unmarshal(text, &pmr)
+		check(err)
+		return pmr
 	}
 	return nil
 }

@@ -69,10 +69,16 @@ func (d DB) DoesRoomExist(rid string) (bool, error) {
 	return b, err
 }
 
+//PostMessage -
+func (d *DB) PostMessage(id string, pm proto.PostMessageRequest) error {
+	_, err := d.dbh.Exec("insert into messages (user_id,channel_id,message) values (?,?,?)", id, pm.Channel, pm.Message)
+	return err
+}
+
 //GetMessages -
 func (d DB) GetMessages(room int, channel int) (map[int]*proto.Message, error) {
 	rows, err := d.dbh.Query(`select m.message_id, m.user_id, m.message, m.created, m.received from messages m join channels c
-	on m.channel_id = c.channel_id join rooms r on r.room_id = c.room_id where r.room_id = ? and c.channel_id = ?`, room, channel)
+	on m.channel_id = c.channel_id join rooms r on r.room_id = c.room_id where r.room_id = ? and c.channel_id = ? order by m.created`, room, channel)
 	check(err)
 	defer rows.Close()
 
@@ -129,8 +135,7 @@ func (d DB) GetRooms(uid string) (map[int]*proto.Room, error) {
 
 //AddUserToRoom - given an id, add this id into the mapping table
 func (d DB) AddUserToRoom(uid string, rid string) error {
-	res, err := d.dbh.Exec("insert into room_users (room_id,user_id) values (?,?)", rid, uid)
-	fmt.Println(res)
+	_, err := d.dbh.Exec("insert into room_users (room_id,user_id) values (?,?)", rid, uid)
 	return err
 }
 
@@ -181,8 +186,7 @@ func (d DB) GetUser(username string) (User, error) {
 //Register - Register's a new user
 func (d DB) Register(username string, password string) error {
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
-	res, err := d.dbh.Exec("insert into users (username,password) values (?,?)", username, string(hash))
-	fmt.Println(res)
+	_, err = d.dbh.Exec("insert into users (username,password) values (?,?)", username, string(hash))
 	return err
 }
 
