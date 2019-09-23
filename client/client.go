@@ -1,18 +1,15 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"log"
 	"net"
-	"os"
-	"reflect"
 	"strconv"
 	"strings"
-	"syscall"
 	proto "termtexter/proto"
 
-	"golang.org/x/crypto/ssh/terminal"
+	"github.com/gdamore/tcell"
+	"github.com/rivo/tview"
 )
 
 const (
@@ -23,6 +20,17 @@ const (
 	HTTP_UNAVAILABLE = 503
 )
 
+type channels struct {
+	getMessagesResponse chan proto.GetMessagesResponse
+	getRoomsResponse    chan proto.GetRoomsResponse
+	joinRoomResponse    chan proto.JoinRoomResponse
+	registerResponse    chan proto.RegisterResponse
+	createRoomResponse  chan proto.CreateRoomResponse
+	postMessageResponse chan proto.PostMessageResponse
+	loginResponse       chan proto.LoginResponse
+	dynamicMessage      chan proto.DynamicMessage
+}
+
 //Client - client struct
 type Client struct {
 	conn     net.Conn
@@ -31,6 +39,7 @@ type Client struct {
 	curRoom  int
 	curChan  int
 	loggedIn bool
+	channels channels
 }
 
 func (c Client) check(e error) {
@@ -47,39 +56,48 @@ func (c *Client) Init(host string, port int) {
 	c.check(err)
 	c.proto = proto.Proto{Conn: c.conn}
 
+	//allocate memory for the channels
+	c.channels.createRoomResponse = make(chan proto.CreateRoomResponse)
+	c.channels.getMessagesResponse = make(chan proto.GetMessagesResponse)
+	c.channels.getRoomsResponse = make(chan proto.GetRoomsResponse)
+	c.channels.joinRoomResponse = make(chan proto.JoinRoomResponse)
+	c.channels.loginResponse = make(chan proto.LoginResponse)
+	c.channels.postMessageResponse = make(chan proto.PostMessageResponse)
+	c.channels.registerResponse = make(chan proto.RegisterResponse)
+	c.channels.dynamicMessage = make(chan proto.DynamicMessage)
+	//listens for incoming packets and sends to the proper channels
+	go c.packetListener()
 }
 
-//GetCredentials - Gets the login credentials from the user
-func (c Client) GetCredentials() (string, string) {
-	reader := bufio.NewReader(os.Stdin)
-	username := ""
-	for username == "" {
-		fmt.Println("Enter your username:")
-		var err error
-		username, err = reader.ReadString('\n')
-		c.check(err)
+func (c *Client) messageHandler(chat *tview.TextView) {
+	for {
+		//block waiting for new dynamic messages
+		msg := <-c.channels.dynamicMessage
+
+		m := proto.Message{}
+		m.Created = msg.Created
+		m.ID = msg.ID
+		m.Message = msg.Message
+		m.Received = msg.Received
+		m.Timestamp = msg.Timestamp
+		m.Type = msg.Type
+		m.UserID = msg.UserID
+
+		c.rooms[msg.Room].Channels[msg.Channel].Messages = append(c.rooms[msg.Room].Channels[msg.Channel].Messages, &m)
+		//TODO: do this if we're viewing the current chat, otherwise bold the channel this message would be in
+		if msg.Room == c.curRoom && msg.Channel == c.curChan {
+			chat.SetText(chat.GetText(true) + c.buildMessage(msg.Created.String(), c.rooms[c.curRoom].Users[msg.UserID].DisplayName, msg.Message))
+		} else {
+
+		}
 	}
-	password := ""
-	for password == "" {
-		fmt.Println("Enter your password:")
-		bytepwd, err := terminal.ReadPassword(int(syscall.Stdin))
-		c.check(err)
-		password = string(bytepwd)
-	}
-	return username, password
 }
 
-//GetRegistrationResponse - decode the struct so we see its what we expect
+//GetRegistrationResponse - see what the response is
 func (c Client) GetRegistrationResponse() proto.RegisterResponse {
 	var ret proto.RegisterResponse
-	switch msg := c.proto.Decode().(type) {
-	case proto.RegisterResponse:
-		ret = msg
-	default:
-		r := reflect.TypeOf(msg)
-		fmt.Printf("Unexpected type:%v\n", r)
-		os.Exit(1)
-	}
+	msg := <-c.channels.registerResponse
+	ret = msg
 	return ret
 }
 
@@ -93,23 +111,19 @@ func (c *Client) CreateRoom(name string, password string) int {
 	err := c.proto.SendCreateRoom(name, password)
 	c.check(err)
 	var res proto.CreateRoomResponse
-	switch msg := c.proto.Decode().(type) {
-	case proto.CreateRoomResponse:
-		res = msg
-		if res.Code == HTTP_OK {
-			//We joined the room
-			log.Println("Successfully created the", name, "room.")
-		} else if res.Code == HTTP_BADREQUEST {
-			//The room already exists
-			log.Println("This room already exists", name)
-		} else {
-			log.Println("Unknown return code from the server:", res.Code)
-		}
-	default:
-		r := reflect.TypeOf(msg)
-		fmt.Printf("Unexpected type:%v\n", r)
-		os.Exit(1)
+	msg := <-c.channels.createRoomResponse
+
+	res = msg
+	if res.Code == HTTP_OK {
+		//We joined the room
+		log.Println("Successfully created the", name, "room.")
+	} else if res.Code == HTTP_BADREQUEST {
+		//The room already exists
+		log.Println("This room already exists", name)
+	} else {
+		log.Println("Unknown return code from the server:", res.Code)
 	}
+
 	return res.Code
 }
 
@@ -119,27 +133,23 @@ func (c *Client) JoinRoom(name string, password string) bool {
 	c.check(err)
 	var res proto.JoinRoomResponse
 	ret := false
-	switch msg := c.proto.Decode().(type) {
-	case proto.JoinRoomResponse:
-		res = msg
-		if res.Code == HTTP_OK {
-			//We joined the room
-			log.Println("Successfully joined the", name, "room.")
-			ret = true
-		} else if res.Code == HTTP_BADREQUEST {
-			//The room doesn't exist
-			log.Println("This room doesn't exist (yet):", name)
-		} else if res.Code == HTTP_FORBIDDEN {
-			//bad
-			log.Println("The password you entered for this room is incorrect, or you were banned from this room")
-		} else {
-			log.Println("Unknown return code from the server:", res.Code)
-		}
-	default:
-		r := reflect.TypeOf(msg)
-		fmt.Printf("Unexpected type:%v\n", r)
-		os.Exit(1)
+	msg := <-c.channels.joinRoomResponse
+
+	res = msg
+	if res.Code == HTTP_OK {
+		//We joined the room
+		log.Println("Successfully joined the", name, "room.")
+		ret = true
+	} else if res.Code == HTTP_BADREQUEST {
+		//The room doesn't exist
+		log.Println("This room doesn't exist (yet):", name)
+	} else if res.Code == HTTP_FORBIDDEN {
+		//bad
+		log.Println("The password you entered for this room is incorrect, or you were banned from this room")
+	} else {
+		log.Println("Unknown return code from the server:", res.Code)
 	}
+
 	return ret
 }
 
@@ -148,20 +158,14 @@ func (c *Client) Login(username string, password string) int {
 	err := c.proto.SendLogin(username, password)
 	c.check(err)
 	var ret proto.LoginResponse
-	switch msg := c.proto.Decode().(type) {
-	case proto.LoginResponse:
-		ret = msg
-		if ret.Code == 200 {
-			//Set our proto's session key
-			c.proto.SetKey(ret.Key)
-			c.loggedIn = true
-		} else {
-			log.Println("Not setting the session key because we got a bad return code...")
-		}
-	default:
-		r := reflect.TypeOf(msg)
-		fmt.Printf("Unexpected type:%v\n", r)
-		os.Exit(1)
+	msg := <-c.channels.loginResponse
+	ret = msg
+	if ret.Code == 200 {
+		//Set our proto's session key
+		c.proto.SetKey(ret.Key)
+		c.loggedIn = true
+	} else {
+		log.Println("Not setting the session key because we got a bad return code...")
 	}
 	return ret.Code
 }
@@ -176,20 +180,15 @@ func (c Client) GetRooms() map[int]*proto.Room {
 	err := c.proto.SendGetRoomsRequest()
 	c.check(err)
 	var ret proto.GetRoomsResponse
-	switch msg := c.proto.Decode().(type) {
-	case proto.GetRoomsResponse:
-		ret = msg
-		if ret.Code == 200 {
-			//We got a good response...
-			//c.rooms = msg.Rooms
-		} else {
-			log.Println("Not updating the rooms because we got a bad return code...")
-		}
-	default:
-		r := reflect.TypeOf(msg)
-		fmt.Printf("Unexpected type:%v\n", r)
-		os.Exit(1)
+	msg := <-c.channels.getRoomsResponse
+	ret = msg
+	if ret.Code == 200 {
+		//We got a good response...
+		//c.rooms = msg.Rooms
+	} else {
+		log.Println("Not updating the rooms because we got a bad return code...")
 	}
+
 	return ret.Rooms
 }
 
@@ -218,19 +217,15 @@ func (c *Client) sendMessage(msg string, room int, channel int) error {
 	err := c.proto.SendPostMessageRequest(msg, room, channel)
 	c.check(err)
 	var ret proto.PostMessageResponse
-	switch msg := c.proto.Decode().(type) {
-	case proto.PostMessageResponse:
-		ret = msg
-		if ret.Code == 200 {
-			//We got a good response...
-		} else {
-			log.Println("We got a bad return code...")
-		}
-	default:
-		r := reflect.TypeOf(msg)
-		fmt.Printf("Unexpected type:%v\n", r)
-		os.Exit(1)
+	rmsg := <-c.channels.postMessageResponse
+
+	ret = rmsg
+	if ret.Code == 200 {
+		//We got a good response...
+	} else {
+		log.Println("We got a bad return code...")
 	}
+
 	return err
 }
 
@@ -240,132 +235,222 @@ func (c *Client) UpdateMessages() {
 }
 
 //GetMessages - Queries the database and gets the last N messages from the DB for the channel we are currently on
-func (c *Client) GetMessages(room int, channel int) map[int]*proto.Message {
+func (c *Client) GetMessages(room int, channel int) []*proto.Message {
 	if room == -1 || channel == -1 {
 		fmt.Println("Please set your channel and room before requesting messages.")
-		empty := make(map[int]*proto.Message)
+		empty := make([]*proto.Message, 0)
 		return empty
 	}
 	err := c.proto.SendGetMessagesRequest(room, channel)
 	c.check(err)
 	var ret proto.GetMessagesResponse
-	switch msg := c.proto.Decode().(type) {
-	case proto.GetMessagesResponse:
-		ret = msg
-		if ret.Code == 200 {
-			//We got a good response...
-			//c.rooms = msg.Rooms
-		} else {
-			log.Println("Not updating the rooms because we got a bad return code...")
-		}
-	default:
-		r := reflect.TypeOf(msg)
-		fmt.Printf("Unexpected type:%v\n", r)
-		os.Exit(1)
+	msg := <-c.channels.getMessagesResponse
+
+	ret = msg
+	if ret.Code == 200 {
+		//We got a good response...
+		//c.rooms = msg.Rooms
+	} else {
+		log.Println("Not updating the rooms because we got a bad return code...")
 	}
+
 	return ret.Messages
 }
 
-//PrintMessages - Queries the database and gets the last N messages from the DB for the channel we are currently on
-func (c *Client) PrintMessages() {
-	if !c.loggedIn {
-		fmt.Println("You are not logged in")
-	}
-	if len(c.rooms[c.curRoom].Channels[c.curChan].Messages) <= 0 {
-		fmt.Println("There are no messages in this channel.")
-	} else {
-		for _, v := range c.rooms[c.curRoom].Channels[c.curChan].Messages {
-			fmt.Println(v.Created, c.rooms[c.curRoom].Users[v.UserID].DisplayName, "<", v.Message, ">")
+func roomTree(c *Client) *tview.TreeView {
+	root := tview.NewTreeNode("Rooms").SetColor(tcell.ColorRed)
+	tree := tview.NewTreeView().SetRoot(root).SetCurrentNode(root)
+
+	for _, v := range c.rooms {
+		node := tview.NewTreeNode(v.DisplayName).SetColor(tcell.ColorGreen)
+		for _, v2 := range v.Channels {
+			node2 := tview.NewTreeNode(v2.Name).SetColor(tcell.ColorGray)
+			node.AddChild(node2)
 		}
+		root.AddChild(node)
 	}
+
+	return tree
 }
 
-//HandleUserInput - A dumb CLI to interface with the program
-func (c *Client) HandleUserInput() {
-	reader := bufio.NewReader(os.Stdin)
-	for {
-		prompt := "$"
-		if c.curRoom != -1 {
-			prompt += "(" + strconv.Itoa(c.curRoom)
-		}
-		if c.curChan != -1 {
-			prompt += ":" + strconv.Itoa(c.curChan)
-		}
-		if c.curRoom != -1 || c.curChan != -1 {
-			prompt += ")"
-		}
+func loginPage(app *tview.Application, pages *tview.Pages, c *Client) *tview.Grid {
+	form := tview.NewGrid().SetColumns(0, 20, 0).SetRows(0, 0, 0).AddItem(tview.NewForm().
+		AddInputField("Username", "", 20, nil, nil).
+		AddPasswordField("Password", "", 10, '*', nil).
+		AddButton("Login", func() {
+			pages.SwitchToPage("main")
+		}).
+		AddButton("Quit", func() {
+			app.Stop()
+		}).AddCheckbox("Remember", false, nil), 1, 1, 1, 1, 0, 0, true)
+	form.SetBorder(true).SetTitle("termtexter").SetTitleAlign(tview.AlignCenter).SetTitleColor(tcell.ColorLimeGreen)
+	return form
+}
 
-		fmt.Print(prompt)
-		action, err := reader.ReadString('\n')
-		action = strings.TrimRight(action, "\r\n")
-		c.check(err)
-		if action == "show rooms" {
-			c.UpdateRooms()
-			c.PrintRooms()
-		} else if action == "show messages" {
-			if c.curRoom == -1 || c.curChan == -1 {
-				fmt.Println("You must select a channel and room first.")
-			} else {
-				c.UpdateMessages()
-				c.PrintMessages()
-			}
-		} else if action == "help" {
-			fmt.Println("help:\tthis screen")
-			fmt.Println("show rooms:\tprint rooms")
-			fmt.Println("show messages:\tprint messages in current room and channel")
-			fmt.Println("send :\tThe next inputted line will be sent to your current room & channel")
-			fmt.Println("use room <ID>:\tswitches focus to a specific room")
-			fmt.Println("use channel <ID>:\tswitches to a specific channel")
-			fmt.Println("join room <name,passwd>:\tlinks your account with a room")
-			fmt.Println("create room <name,passwd>:\tcreate a new room. automatically adds you as an admin and creates a default channel")
-		} else if action == "send" {
-			if c.curRoom == -1 || c.curChan == -1 {
-				fmt.Println("You must select a channel and room first.")
-			} else {
-				//wait for a message
-				fmt.Print(prompt + "#")
-				msg, err := reader.ReadString('\n')
-				msg = strings.TrimRight(msg, "\r\n")
-				c.check(err)
-				//send that message to the server
-				c.sendMessage(msg, c.curRoom, c.curChan)
-			}
-		} else if action == "login" {
-			if c.Login("Justin", "poop") == 200 {
-				c.UpdateRooms()
-			} else {
-				fmt.Println("Something went wrong when logging in")
-			}
-		} else if len(strings.Fields(action)) > 2 && strings.Fields(action)[0] == "use" && strings.Fields(action)[1] == "room" {
-			c.curRoom, err = strconv.Atoi(strings.Fields(action)[2])
-			c.check(err)
-		} else if len(strings.Fields(action)) > 2 && strings.Fields(action)[0] == "use" && strings.Fields(action)[1] == "channel" {
-			if c.curRoom == -1 {
-				fmt.Println("You must set a room before you can set a channel")
-			} else {
-				c.curChan, err = strconv.Atoi(strings.Fields(action)[2])
-				c.check(err)
-			}
-		} else if len(strings.Fields(action)) > 3 && strings.Fields(action)[0] == "create" && strings.Fields(action)[1] == "room" {
-			rname := strings.Fields(action)[2]
-			rpass := strings.Fields(action)[3]
-			c.CreateRoom(rname, rpass)
-		} else if len(strings.Fields(action)) > 3 && strings.Fields(action)[0] == "join" && strings.Fields(action)[1] == "room" {
-			jname := strings.Fields(action)[2]
-			jpass := strings.Fields(action)[3]
-			c.JoinRoom(jname, jpass)
-		} else {
-			fmt.Println("Unknown command:", action)
-		}
+func (c *Client) buildMessage(date string, dispname string, msg string) string {
+	return date + " - " + dispname + " <" + msg + ">\n"
+}
+
+func (c *Client) mainPage(app *tview.Application, pages *tview.Pages) (*tview.Flex, *tview.TreeView, *tview.TextView) {
+
+	//data for the rooms
+	rooms := roomTree(c)
+	rooms.SetBorder(true).SetTitle("Rooms")
+
+	//data for the chat window
+	c.UpdateMessages()
+	messages := ""
+	log.Println(c.rooms[c.curRoom].Channels[c.curChan].Messages)
+	for _, v := range c.rooms[c.curRoom].Channels[c.curChan].Messages {
+		messages += c.buildMessage(v.Created.String(), c.rooms[c.curRoom].Users[v.UserID].DisplayName, v.Message)
 	}
 
+	chat := tview.NewTextView().SetScrollable(true).ScrollToEnd().SetText(strings.Repeat("\n", 1000) + messages)
+	chat.SetBorder(true).SetTitle("Chat")
+	//handles new messages that are dynamically sent in
+	go c.messageHandler(chat)
+
+	//chatbox
+	chatbox := tview.NewInputField()
+	chatbox.SetBorder(true).SetTitle("Chatbox")
+
+	//users
+	users := tview.NewList()
+	for _, v := range c.rooms[c.curRoom].Users {
+		users.AddItem(v.DisplayName, "", '+', nil)
+	}
+	users.SetBorder(true).SetTitle("Users")
+
+	//flex for the page
+	flex := tview.NewFlex().
+		AddItem(rooms, 20, 1, false).
+		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+			//AddItem(tview.NewBox().SetBorder(true).SetTitle("Top"), 0, 1, false).
+			AddItem(chat, 0, 3, false).
+			AddItem(chatbox, 3, 1, false), 0, 2, false).
+		AddItem(users, 20, 1, false)
+
+	chat.SetTitleColor(tcell.ColorRed)
+
+	rooms.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		var ret *tcell.EventKey
+		ret = nil
+		if event.Key() == tcell.KeyRight {
+			rooms.SetTitleColor(tcell.ColorWhite)
+			chat.SetTitleColor(tcell.ColorRed)
+			app.SetFocus(chat)
+		} else {
+			ret = event
+		}
+		return ret
+	})
+
+	chat.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		var ret *tcell.EventKey
+		ret = nil
+		if event.Key() == tcell.KeyLeft {
+			chat.SetTitleColor(tcell.ColorWhite)
+			rooms.SetTitleColor(tcell.ColorRed)
+			app.SetFocus(rooms)
+			ret = event
+		} else if event.Key() == tcell.KeyDown {
+			chat.SetTitleColor(tcell.ColorWhite)
+			chatbox.SetTitleColor(tcell.ColorRed)
+			app.SetFocus(chatbox)
+		} else if event.Key() == tcell.KeyRight {
+			chat.SetTitleColor(tcell.ColorWhite)
+			users.SetTitleColor(tcell.ColorRed)
+			app.SetFocus(users)
+			ret = event
+		} else if event.Key() == tcell.KeyPgUp {
+			ret = tcell.NewEventKey(tcell.KeyUp, event.Rune(), event.Modifiers())
+		} else if event.Key() == tcell.KeyPgDn {
+			ret = tcell.NewEventKey(tcell.KeyDown, event.Rune(), event.Modifiers())
+		}
+		return ret
+	})
+
+	users.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		var ret *tcell.EventKey
+		ret = nil
+		if event.Key() == tcell.KeyLeft {
+			users.SetTitleColor(tcell.ColorWhite)
+			chat.SetTitleColor(tcell.ColorRed)
+			app.SetFocus(chat)
+		} else {
+			ret = event
+		}
+		return ret
+	})
+
+	chatbox.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		var ret *tcell.EventKey
+		ret = nil
+		if event.Key() == tcell.KeyUp {
+			chatbox.SetTitleColor(tcell.ColorWhite)
+			chat.SetTitleColor(tcell.ColorRed)
+			app.SetFocus(chat)
+		} else if event.Key() == tcell.KeyEnter {
+			//We want to send a message to the server on an enter
+			err := c.sendMessage(chatbox.GetText(), c.curRoom, c.curChan)
+			c.check(err)
+			//chat.SetText(chat.GetText(true) + chatbox.GetText() + "\n")
+			chatbox.SetText("")
+		} else {
+			ret = event
+		}
+		return ret
+	})
+
+	return flex, rooms, chat
+}
+
+//packetListener - one go routine that listens on the socket and sends the appropriate object to the appropriate channel
+func (c *Client) packetListener() {
+	for {
+		switch msg := c.proto.Decode().(type) {
+		case proto.GetMessagesResponse:
+			c.channels.getMessagesResponse <- msg
+		case proto.GetRoomsResponse:
+			c.channels.getRoomsResponse <- msg
+		case proto.JoinRoomResponse:
+			c.channels.joinRoomResponse <- msg
+		case proto.RegisterResponse:
+			c.channels.registerResponse <- msg
+		case proto.CreateRoomResponse:
+			c.channels.createRoomResponse <- msg
+		case proto.PostMessageResponse:
+			c.channels.postMessageResponse <- msg
+		case proto.LoginResponse:
+			c.channels.loginResponse <- msg
+		case proto.DynamicMessage:
+			c.channels.dynamicMessage <- msg
+		default:
+			log.Println("I don't know what I just got")
+			log.Println(msg)
+		}
+	}
 }
 
 func main() {
+
 	c := new(Client)
 	c.curRoom = 3
 	c.curChan = 1
 	c.Init("localhost", 1200)
-	//username, password := c.GetCredentials()
-	c.HandleUserInput()
+
+	c.Login("justin", "poop")
+	c.UpdateRooms()
+
+	app := tview.NewApplication()
+	pages := tview.NewPages()
+
+	flex, _, chat := c.mainPage(app, pages)
+
+	pages.AddPage("main", flex, true, true)
+	pages.AddPage("login", loginPage(app, pages, c), true, false)
+
+	if err := app.SetRoot(pages, true).SetFocus(chat).Run(); err != nil {
+		panic(err)
+	}
 }

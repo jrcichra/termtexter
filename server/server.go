@@ -1,12 +1,14 @@
 package main
 
 import (
+	"container/list"
 	"fmt"
 	"log"
 	"net"
 	"os"
 	"reflect"
 	"strconv"
+	"time"
 
 	ttdb "termtexter/db"
 	proto "termtexter/proto"
@@ -24,7 +26,9 @@ const (
 
 //Server - an instance of a termtexter server
 type Server struct {
-	db ttdb.DB
+	db          ttdb.DB
+	connections map[int]*list.List  //map of user ids to an array of sockets, because one user can be logged in multiple places at the same time
+	Rooms       map[int]*proto.Room //map of rooms to keep track of room information
 }
 
 func (s Server) check(e error) {
@@ -34,12 +38,15 @@ func (s Server) check(e error) {
 }
 
 // Init - Initalizes a termtexter server
-func (s Server) Init(port int) {
+func (s *Server) Init(port int) {
 	service := ":" + strconv.Itoa(port)
 	tcpAddr, err := net.ResolveTCPAddr("tcp4", service)
 	s.check(err)
 	listener, err := net.ListenTCP("tcp", tcpAddr)
 	s.check(err)
+	//init the maps we have
+	s.connections = make(map[int]*list.List)
+	s.Rooms = make(map[int]*proto.Room)
 
 	// connect to our db package
 	s.db.Connect(os.Args[1], os.Args[2])
@@ -49,24 +56,61 @@ func (s Server) Init(port int) {
 		if err != nil {
 			continue
 		}
+		log.Println("Someone connected.")
 		go s.handleClient(conn)
 	}
 }
 
-func (s Server) handleLogin(l proto.Login, p proto.Proto) {
+//DistributeMessage -
+func (s *Server) DistributeMessage(id int, pm proto.PostMessageRequest, rowid int64) {
+	dm := proto.DynamicMessage{}
+	dm.Channel = pm.Channel
+	dm.Timestamp = pm.Timestamp
+	dm.Message = pm.Message
+	dm.Room = pm.Room
+	dm.Channel = pm.Channel
+	dm.UserID = id
+	dm.ID = int(rowid)
+	dm.Type = proto.DYNAMICMESSAGE
+	dm.Created = time.Now().Round(time.Second)
+
+	//go through the linked list, distributing the message to all who care
+	node := s.connections[id].Front()
+	log.Println(s.connections[id].Len())
+	for i := 0; i < s.connections[id].Len(); i++ {
+		switch p := node.Value.(type) {
+		case *proto.Proto:
+			p.SendDynamicMessage(&dm)
+		default:
+			log.Fatalln("Did not get *proto.Proto in the linked list while distributing a message")
+		}
+		node.Next()
+
+	}
+}
+
+func (s *Server) updateServerRooms(id string) error {
+	res, err := s.db.GetRooms(id)
+	s.Rooms = res
+	return err
+}
+
+func (s *Server) handleLogin(l proto.Login, p proto.Proto) int {
 	if l.Username == "" {
 		log.Println("Username cannot be an empty field.")
 		p.SendBadLoginResponse()
-		return
+		return -1
 	}
 	if l.Password == "" {
 		log.Println("Password cannot be an empty field.")
 		p.SendBadLoginResponse()
-		return
+		return -1
 	}
 
 	// We have a login packet, it has a username and password, let's check it against the database
 	id, _ := s.db.GetUserID(l.Username)
+	intid, err := strconv.Atoi(id)
+	s.check(err)
 	if id != "" {
 		res := s.db.IsValidLogin(id, l.Password)
 		if res {
@@ -78,7 +122,15 @@ func (s Server) handleLogin(l proto.Login, p proto.Proto) {
 			s.check(err)
 			// Send the packet with the updates
 			err = p.SendLoginResponse(uuid.String())
-			s.check(err)
+			//add this proto object to our linked list of sockets for this user
+			//see if it has been initalized yet
+			if s.connections[intid] == nil {
+				s.connections[intid] = list.New()
+			}
+			s.connections[intid].PushBack(&p)
+			log.Println("Added the user to the linked list")
+			//See what rooms this user is in (for the server's records)
+			s.updateServerRooms(id)
 		} else {
 			// They don't exist, craft a response that doesn't have a good login
 			err := p.SendBadLoginResponse()
@@ -89,17 +141,17 @@ func (s Server) handleLogin(l proto.Login, p proto.Proto) {
 		err := p.SendBadLoginResponse()
 		s.check(err)
 	}
-
+	return intid
 }
 
-func (s Server) handleMessage(m proto.Message, p proto.Proto) {
+func (s *Server) handleMessage(m proto.Message, p proto.Proto) {
 	log.Println(m.Type)
 	log.Println(m.Timestamp)
 	log.Println(m.Message)
 	log.Println(m.Key)
 }
 
-func (s Server) handleRegistration(r proto.Register, p proto.Proto) {
+func (s *Server) handleRegistration(r proto.Register, p proto.Proto) {
 	//Make sure this username doesn't already exist
 	exists, err := s.db.UserExists(r.Username)
 	s.check(err)
@@ -114,7 +166,7 @@ func (s Server) handleRegistration(r proto.Register, p proto.Proto) {
 		p.SendRegistrationResponse(HTTP_OK)
 	}
 }
-func (s Server) handleCreateRoom(cr proto.CreateRoomRequest, p proto.Proto) {
+func (s *Server) handleCreateRoom(cr proto.CreateRoomRequest, p proto.Proto) {
 	if cr.Room == "" {
 		log.Println("Room name cannot be empty")
 		p.SendCreateRoomResponse(cr.Room, HTTP_ERROR)
@@ -148,12 +200,15 @@ func (s Server) handleCreateRoom(cr proto.CreateRoomRequest, p proto.Proto) {
 		//We can make the room, put the requester as an admin, and create a default channel
 		err := s.db.CreateRoom(cr.Room, id, cr.Password)
 		s.check(err)
+		//update the server cache
+		err = s.updateServerRooms(id)
+		s.check(err)
 		//We did it all, tell them how it went
 		p.SendCreateRoomResponse(cr.Room, HTTP_OK)
 	}
 }
 
-func (s Server) handleJoinRoom(jr proto.JoinRoomRequest, p proto.Proto) {
+func (s *Server) handleJoinRoom(jr proto.JoinRoomRequest, p proto.Proto) {
 	if jr.Room == "" {
 		log.Println("Room name cannot be empty")
 		return
@@ -180,7 +235,13 @@ func (s Server) handleJoinRoom(jr proto.JoinRoomRequest, p proto.Proto) {
 		err = s.db.AddUserToRoom(id, jr.Room)
 		s.check(err)
 		if err == nil {
-			p.SendJoinRoomResponse(jr.Room, HTTP_OK)
+			err = s.updateServerRooms(id)
+			if err == nil {
+				p.SendJoinRoomResponse(jr.Room, HTTP_OK)
+			} else {
+				//Something went wrong updating the server cache
+				p.SendJoinRoomResponse(jr.Room, HTTP_ERROR)
+			}
 		}
 	} else {
 		//The room does not exist...send them a sad response
@@ -189,7 +250,7 @@ func (s Server) handleJoinRoom(jr proto.JoinRoomRequest, p proto.Proto) {
 
 }
 
-func (s Server) handlePostMessage(pm proto.PostMessageRequest, p proto.Proto) {
+func (s *Server) handlePostMessage(pm proto.PostMessageRequest, p proto.Proto) {
 	if pm.Key == "" {
 		log.Println("Key cannot be empty")
 		p.SendPostMessageResponse(HTTP_FORBIDDEN)
@@ -206,13 +267,18 @@ func (s Server) handlePostMessage(pm proto.PostMessageRequest, p proto.Proto) {
 	}
 
 	//try to insert the message in the proper place
-	err = s.db.PostMessage(id, pm)
-
+	rowID, err := s.db.PostMessage(id, pm)
+	s.check(err)
+	//distribute the message to all the proper connections
+	intid, err := strconv.Atoi(id)
+	s.check(err)
+	s.DistributeMessage(intid, pm, rowID)
+	//send a good response to the sender
 	p.SendPostMessageResponse(HTTP_OK)
 
 }
 
-func (s Server) handleGetMessages(gm proto.GetMessagesRequest, p proto.Proto) {
+func (s *Server) handleGetMessages(gm proto.GetMessagesRequest, p proto.Proto) {
 	if gm.Key == "" {
 		log.Println("Key cannot be empty")
 		p.SendGetMessagesResponse(HTTP_FORBIDDEN, nil)
@@ -237,7 +303,7 @@ func (s Server) handleGetMessages(gm proto.GetMessagesRequest, p proto.Proto) {
 
 }
 
-func (s Server) handleGetRooms(gr proto.GetRoomsRequest, p proto.Proto) {
+func (s *Server) handleGetRooms(gr proto.GetRoomsRequest, p proto.Proto) {
 	if gr.Key == "" {
 		log.Println("Key cannot be empty")
 		p.SendGetRoomsResponse(HTTP_FORBIDDEN, nil)
@@ -262,17 +328,18 @@ func (s Server) handleGetRooms(gr proto.GetRoomsRequest, p proto.Proto) {
 
 }
 
-func (s Server) handleClient(conn net.Conn) {
+func (s *Server) handleClient(conn net.Conn) {
 	//defer conn.Close() // close connection before exit
 
 	//get a proto object which handles the message/protocol for us
 	p := proto.Proto{Conn: conn}
+	var id int //the id of the client, if we get that far
 	flag := false
 	for !flag {
 		//based on the message type, take different actions
 		switch msg := p.Decode().(type) {
 		case proto.Login:
-			s.handleLogin(msg, p)
+			id = s.handleLogin(msg, p)
 		case proto.Message:
 			s.handleMessage(msg, p)
 		case proto.Register:
@@ -290,6 +357,31 @@ func (s Server) handleClient(conn net.Conn) {
 		default:
 			if msg == nil {
 				log.Println("Somebody left")
+				//drop this connection from our records, if it's not empty
+				if id != -1 {
+					found := false
+					node := s.connections[id].Front()
+					for node != nil && !found {
+						//for this id, see if one of these connection memory addresses match
+						switch p := node.Value.(type) {
+						case *proto.Proto:
+							if conn == p.Conn {
+								//if so, drop the node we are on from the linked list
+								s.connections[id].Remove(node)
+								//stop the loop, we found and removed the connection
+								found = true
+								log.Println("We dropped the connection from the linked list for the user who just left")
+							}
+						default:
+							log.Fatalln("Did not get *proto.Proto in the linked list")
+						}
+						node = node.Next()
+
+					}
+					if !found {
+						log.Println("Weird...we didn't find that connection in the linked list...")
+					}
+				}
 				flag = true
 				break
 			} else {

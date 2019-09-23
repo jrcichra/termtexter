@@ -24,6 +24,7 @@ const (
 	GETMESSAGESRESPONSE = "getmessages-response"
 	POSTMESSAGE         = "postmessage"
 	POSTMESSAGERESPONSE = "postmessage-response"
+	DYNAMICMESSAGE      = "dynamicmessage"
 	HTTP_OK             = 200
 	HTTP_FORBIDDEN      = 403
 	HTTP_BADREQUEST     = 400
@@ -34,6 +35,20 @@ const (
 //Type - Only gets the type from the decoder
 type Type struct {
 	Type string `json:"type"`
+}
+
+//DynamicMessage -
+type DynamicMessage struct {
+	Type      string    `json:"type"`
+	Timestamp int64     `json:"timestamp"`
+	Code      int       `json:"code"`
+	Room      int       `json:"room"`
+	Channel   int       `json:"channel"`
+	ID        int       `json:"id"`
+	UserID    int       `json:"user_id"`
+	Message   string    `json:"message"`
+	Created   time.Time `json:"created"`
+	Received  time.Time `json:"received"`
 }
 
 //LoginResponse - tells the client if they were logged in or not, and if so, what their uuid is
@@ -65,15 +80,6 @@ type Login struct {
 	Timestamp int64  `json:"timestamp"`
 	Username  string `json:"username"`
 	Password  string `json:"password"`
-}
-
-//MessageResponse - Object for a message response
-type MessageResponse struct {
-	Type      string `json:"type"`
-	Timestamp int64  `json:"timestamp"`
-	Message   string `json:"message"`
-	Key       string `json:"key"`
-	Code      int    `json:"code"`
 }
 
 //Message - Object for a message
@@ -135,9 +141,9 @@ type GetRoomsRequest struct {
 
 //Channel - Channel object
 type Channel struct {
-	ID       int              `json:"id"`
-	Name     string           `json:"name"`
-	Messages map[int]*Message `json:"messages"`
+	ID       int        `json:"id"`
+	Name     string     `json:"name"`
+	Messages []*Message `json:"messages"`
 }
 
 //Room - Room object
@@ -167,10 +173,10 @@ type GetRoomsResponse struct {
 
 //GetMessagesResponse -
 type GetMessagesResponse struct {
-	Type      string           `json:"type"`
-	Timestamp int64            `json:"timestamp"`
-	Messages  map[int]*Message `json:"messages"`
-	Code      int              `json:"code"`
+	Type      string     `json:"type"`
+	Timestamp int64      `json:"timestamp"`
+	Messages  []*Message `json:"messages"`
+	Code      int        `json:"code"`
 }
 
 //GetMessagesRequest -
@@ -205,6 +211,18 @@ type PostMessageResponse struct {
 	Code      int    `json:"code"`
 }
 
+//SendDynamicMessage -
+func (p *Proto) SendDynamicMessage(dm *DynamicMessage) error {
+	j, err := json.Marshal(dm)
+	if err != nil {
+		return err
+	}
+
+	tmp := append([]byte(j), byte('\n'))
+	p.Conn.Write(tmp)
+	return nil
+}
+
 //SendPostMessageRequest -
 func (p *Proto) SendPostMessageRequest(msg string, room int, channel int) error {
 	pmr := PostMessageRequest{}
@@ -219,8 +237,8 @@ func (p *Proto) SendPostMessageRequest(msg string, room int, channel int) error 
 		return err
 	}
 	//TODO compress into one call
-	p.Conn.Write([]byte(j))
-	p.Conn.Write([]byte("\n"))
+	tmp := append([]byte(j), byte('\n'))
+	p.Conn.Write(tmp)
 	return nil
 }
 
@@ -235,8 +253,8 @@ func (p *Proto) SendPostMessageResponse(c int) error {
 		return err
 	}
 	//TODO compress into one call
-	p.Conn.Write([]byte(j))
-	p.Conn.Write([]byte("\n"))
+	tmp := append([]byte(j), byte('\n'))
+	p.Conn.Write(tmp)
 	return nil
 }
 
@@ -253,13 +271,13 @@ func (p *Proto) SendGetMessagesRequest(room int, channel int) error {
 		return err
 	}
 	//TODO compress into one call
-	p.Conn.Write([]byte(j))
-	p.Conn.Write([]byte("\n"))
+	tmp := append([]byte(j), byte('\n'))
+	p.Conn.Write(tmp)
 	return nil
 }
 
 //SendGetMessagesResponse - sends a response to a getmessages request
-func (p *Proto) SendGetMessagesResponse(c int, m map[int]*Message) error {
+func (p *Proto) SendGetMessagesResponse(c int, m []*Message) error {
 	gmr := GetMessagesResponse{}
 	gmr.Timestamp = time.Now().Unix()
 	gmr.Type = GETMESSAGESRESPONSE
@@ -270,8 +288,8 @@ func (p *Proto) SendGetMessagesResponse(c int, m map[int]*Message) error {
 		return err
 	}
 	//TODO compress into one call
-	p.Conn.Write([]byte(j))
-	p.Conn.Write([]byte("\n"))
+	tmp := append([]byte(j), byte('\n'))
+	p.Conn.Write(tmp)
 	return nil
 }
 
@@ -287,8 +305,8 @@ func (p *Proto) SendJoinRoom(name string, password string) error {
 		return err
 	}
 	//TODO compress into one call
-	p.Conn.Write([]byte(j))
-	p.Conn.Write([]byte("\n"))
+	tmp := append([]byte(j), byte('\n'))
+	p.Conn.Write(tmp)
 	return nil
 }
 
@@ -309,8 +327,8 @@ func (p Proto) SendLogin(username string, password string) error {
 		return err
 	}
 	//TODO compress into one call
-	p.Conn.Write([]byte(j))
-	p.Conn.Write([]byte("\n"))
+	tmp := append([]byte(j), byte('\n'))
+	p.Conn.Write(tmp)
 	return nil
 }
 
@@ -327,8 +345,8 @@ func (p Proto) SendCreateRoom(name string, password string) error {
 		return err
 	}
 	//TODO compress into one call
-	p.Conn.Write([]byte(j))
-	p.Conn.Write([]byte("\n"))
+	tmp := append([]byte(j), byte('\n'))
+	p.Conn.Write(tmp)
 	return nil
 }
 
@@ -344,8 +362,8 @@ func (p Proto) SendCreateRoomResponse(r string, code int) error {
 		return err
 	}
 	//TODO compress into one call
-	p.Conn.Write([]byte(j))
-	p.Conn.Write([]byte("\n"))
+	tmp := append([]byte(j), byte('\n'))
+	p.Conn.Write(tmp)
 	return nil
 }
 
@@ -361,8 +379,8 @@ func (p Proto) SendJoinRoomResponse(r string, code int) error {
 		return err
 	}
 	//TODO compress into one call
-	p.Conn.Write([]byte(j))
-	p.Conn.Write([]byte("\n"))
+	tmp := append([]byte(j), byte('\n'))
+	p.Conn.Write(tmp)
 	return nil
 }
 
@@ -377,8 +395,8 @@ func (p Proto) SendRegistrationResponse(code int) error {
 		return err
 	}
 	//TODO compress into one call
-	p.Conn.Write([]byte(j))
-	p.Conn.Write([]byte("\n"))
+	tmp := append([]byte(j), byte('\n'))
+	p.Conn.Write(tmp)
 	return nil
 }
 
@@ -394,8 +412,8 @@ func (p Proto) SendRegistration(username string, password string) error {
 		return err
 	}
 	//TODO compress into one call
-	p.Conn.Write([]byte(j))
-	p.Conn.Write([]byte("\n"))
+	tmp := append([]byte(j), byte('\n'))
+	p.Conn.Write(tmp)
 	return nil
 }
 
@@ -411,8 +429,8 @@ func (p Proto) SendBadLoginResponse() error {
 		return err
 	}
 	//we might need a newline but if the other end is go we should be fine?
-	p.Conn.Write([]byte(j))
-	p.Conn.Write([]byte("\n"))
+	tmp := append([]byte(j), byte('\n'))
+	p.Conn.Write(tmp)
 	return nil
 }
 
@@ -432,8 +450,8 @@ func (p Proto) SendLoginResponse(key string) error {
 		return err
 	}
 	//we might need a newline but if the other end is go we should be fine?
-	p.Conn.Write([]byte(j))
-	p.Conn.Write([]byte("\n"))
+	tmp := append([]byte(j), byte('\n'))
+	p.Conn.Write(tmp)
 	return nil
 }
 
@@ -448,8 +466,8 @@ func (p Proto) SendGetRoomsRequest() error {
 		return err
 	}
 	//we might need a newline but if the other end is go we should be fine?
-	p.Conn.Write([]byte(j))
-	p.Conn.Write([]byte("\n"))
+	tmp := append([]byte(j), byte('\n'))
+	p.Conn.Write(tmp)
 	return nil
 }
 
@@ -465,8 +483,8 @@ func (p Proto) SendGetRoomsResponse(code int, rooms map[int]*Room) error {
 		return err
 	}
 	//we might need a newline but if the other end is go we should be fine?
-	p.Conn.Write([]byte(j))
-	p.Conn.Write([]byte("\n"))
+	tmp := append([]byte(j), byte('\n'))
+	p.Conn.Write(tmp)
 	return nil
 }
 
@@ -558,6 +576,11 @@ func (p Proto) Decode() interface{} {
 		err := json.Unmarshal(text, &pmr)
 		check(err)
 		return pmr
+	} else if a.Type == DYNAMICMESSAGE {
+		var dm DynamicMessage
+		err := json.Unmarshal(text, &dm)
+		check(err)
+		return dm
 	}
 	return nil
 }

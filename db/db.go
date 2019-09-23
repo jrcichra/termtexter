@@ -36,7 +36,7 @@ func check(e error) {
 func (d *DB) Connect(hostname string, password string) error {
 	// connect to the database
 	var err error
-	d.dbh, err = sql.Open("mysql", "termtexter:"+password+"@tcp("+hostname+")/termtexter?parseTime=true")
+	d.dbh, err = sql.Open("mysql", "termtexter:"+password+"@tcp("+hostname+")/termtexter?parseTime=true&loc=America%2FNew_York")
 	return err
 }
 
@@ -70,23 +70,25 @@ func (d DB) DoesRoomExist(rid string) (bool, error) {
 }
 
 //PostMessage -
-func (d *DB) PostMessage(id string, pm proto.PostMessageRequest) error {
-	_, err := d.dbh.Exec("insert into messages (user_id,channel_id,message) values (?,?,?)", id, pm.Channel, pm.Message)
-	return err
+func (d *DB) PostMessage(id string, pm proto.PostMessageRequest) (int64, error) {
+	v, err := d.dbh.Exec("insert into messages (user_id,channel_id,message) values (?,?,?)", id, pm.Channel, pm.Message)
+	check(err)
+	i, err := v.LastInsertId()
+	return i, err
 }
 
 //GetMessages -
-func (d DB) GetMessages(room int, channel int) (map[int]*proto.Message, error) {
+func (d DB) GetMessages(room int, channel int) ([]*proto.Message, error) {
 	rows, err := d.dbh.Query(`select m.message_id, m.user_id, m.message, m.created, m.received from messages m join channels c
 	on m.channel_id = c.channel_id join rooms r on r.room_id = c.room_id where r.room_id = ? and c.channel_id = ? order by m.created`, room, channel)
 	check(err)
 	defer rows.Close()
 
-	messages := make(map[int]*proto.Message)
+	messages := make([]*proto.Message, 0)
 	for rows.Next() {
 		message := proto.Message{}
 		rows.Scan(&message.ID, &message.UserID, &message.Message, &message.Created, &message.Received)
-		messages[message.ID] = &message
+		messages = append(messages, &message)
 		log.Println(message)
 	}
 
