@@ -74,18 +74,23 @@ func (s *Server) DistributeMessage(id int, pm proto.PostMessageRequest, rowid in
 	dm.Type = proto.DYNAMICMESSAGE
 	dm.Created = time.Now().Round(time.Second)
 
-	//go through the linked list, distributing the message to all who care
-	node := s.connections[id].Front()
-	log.Println(s.connections[id].Len())
-	for i := 0; i < s.connections[id].Len(); i++ {
-		switch p := node.Value.(type) {
-		case *proto.Proto:
-			p.SendDynamicMessage(&dm)
-		default:
-			log.Fatalln("Did not get *proto.Proto in the linked list while distributing a message")
-		}
-		node.Next()
+	//loop through linked lists for every user in this room
+	for _, v := range s.Rooms[dm.Room].Users {
+		//go through the linked list, distributing the message to all who care
+		if s.connections[v.ID] != nil {
+			node := s.connections[v.ID].Front()
+			log.Println(s.connections[id].Len())
+			for i := 0; i < s.connections[id].Len(); i++ {
+				switch p := node.Value.(type) {
+				case *proto.Proto:
+					p.SendDynamicMessage(&dm)
+				default:
+					log.Fatalln("Did not get *proto.Proto in the linked list while distributing a message")
+				}
+				node = node.Next()
 
+			}
+		}
 	}
 }
 
