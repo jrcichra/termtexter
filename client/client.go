@@ -40,6 +40,8 @@ type Client struct {
 	curChan  int
 	loggedIn bool
 	channels channels
+	app      *tview.Application
+	pages    *tview.Pages
 }
 
 func (c Client) check(e error) {
@@ -67,6 +69,9 @@ func (c *Client) Init(host string, port int) {
 	c.channels.dynamicMessage = make(chan proto.DynamicMessage)
 	//listens for incoming packets and sends to the proper channels
 	go c.packetListener()
+	// make the app and pages
+	c.app = tview.NewApplication()
+	c.pages = tview.NewPages()
 }
 
 func (c *Client) messageHandler(chat *tview.TextView) {
@@ -88,7 +93,7 @@ func (c *Client) messageHandler(chat *tview.TextView) {
 		if msg.Room == c.curRoom && msg.Channel == c.curChan {
 			chat.SetText(chat.GetText(true) + c.buildMessage(msg.Created.String(), c.rooms[c.curRoom].Users[msg.UserID].DisplayName, msg.Message))
 		} else {
-
+			chat.SetText("You're in the wrong castle")
 		}
 	}
 }
@@ -273,15 +278,15 @@ func roomTree(c *Client) *tview.TreeView {
 	return tree
 }
 
-func loginPage(app *tview.Application, pages *tview.Pages, c *Client) *tview.Grid {
+func (c *Client) loginPage() *tview.Grid {
 	form := tview.NewGrid().SetColumns(0, 20, 0).SetRows(0, 0, 0).AddItem(tview.NewForm().
 		AddInputField("Username", "", 20, nil, nil).
 		AddPasswordField("Password", "", 10, '*', nil).
 		AddButton("Login", func() {
-			pages.SwitchToPage("main")
+			c.pages.SwitchToPage("main")
 		}).
 		AddButton("Quit", func() {
-			app.Stop()
+			c.app.Stop()
 		}).AddCheckbox("Remember", false, nil), 1, 1, 1, 1, 0, 0, true)
 	form.SetBorder(true).SetTitle("termtexter").SetTitleAlign(tview.AlignCenter).SetTitleColor(tcell.ColorLimeGreen)
 	return form
@@ -331,6 +336,11 @@ func (c *Client) mainPage(app *tview.Application, pages *tview.Pages) (*tview.Fl
 		AddItem(users, 20, 1, false)
 
 	chat.SetTitleColor(tcell.ColorRed)
+
+	//force a redraw when the textview is updated
+	chat.SetChangedFunc(func() {
+		app.Draw()
+	})
 
 	rooms.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		var ret *tcell.EventKey
@@ -442,15 +452,12 @@ func main() {
 	c.Login("justin", "poop")
 	c.UpdateRooms()
 
-	app := tview.NewApplication()
-	pages := tview.NewPages()
+	flex, _, chat := c.mainPage(c.app, c.pages)
 
-	flex, _, chat := c.mainPage(app, pages)
+	c.pages.AddPage("main", flex, true, true)
+	c.pages.AddPage("login", c.loginPage(), true, false)
 
-	pages.AddPage("main", flex, true, true)
-	pages.AddPage("login", loginPage(app, pages, c), true, false)
-
-	if err := app.SetRoot(pages, true).SetFocus(chat).Run(); err != nil {
+	if err := c.app.SetRoot(c.pages, true).SetFocus(chat).Run(); err != nil {
 		panic(err)
 	}
 }
