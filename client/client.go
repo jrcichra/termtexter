@@ -42,6 +42,10 @@ type Client struct {
 	channels channels
 	app      *tview.Application
 	pages    *tview.Pages
+	chat     *tview.TextView
+	users    *tview.List
+	roomtree *tview.TreeView
+	mainmenu *tview.Primitive
 }
 
 func (c Client) check(e error) {
@@ -159,20 +163,22 @@ func (c *Client) JoinRoom(name string, password string) bool {
 }
 
 //Login - Logs user in and returns http code
-func (c *Client) Login(username string, password string) int {
+func (c *Client) Login(username string, password string) bool {
 	err := c.proto.SendLogin(username, password)
 	c.check(err)
 	var ret proto.LoginResponse
 	msg := <-c.channels.loginResponse
 	ret = msg
+	var resp bool
 	if ret.Code == 200 {
 		//Set our proto's session key
 		c.proto.SetKey(ret.Key)
 		c.loggedIn = true
+		resp = true
 	} else {
-		log.Println("Not setting the session key because we got a bad return code...")
+		resp = false
 	}
-	return ret.Code
+	return resp
 }
 
 //UpdateRooms - updates the object's rooms struct value by using the return value of GetRooms
@@ -236,36 +242,42 @@ func (c *Client) sendMessage(msg string, room int, channel int) error {
 
 //UpdateMessages - Queries the database and gets the last N messages from the DB for the channel we are currently on
 func (c *Client) UpdateMessages() {
-	c.rooms[c.curRoom].Channels[c.curChan].Messages = c.GetMessages(c.curRoom, c.curChan)
+	msgs, empty := c.GetMessages(c.curRoom, c.curChan)
+	if !empty {
+		c.rooms[c.curRoom].Channels[c.curChan].Messages = msgs
+	} else {
+		//no messages, don't do anything :-)
+	}
 }
 
 //GetMessages - Queries the database and gets the last N messages from the DB for the channel we are currently on
-func (c *Client) GetMessages(room int, channel int) []*proto.Message {
+func (c *Client) GetMessages(room int, channel int) ([]*proto.Message, bool) {
+	e := true
 	if room == -1 || channel == -1 {
 		fmt.Println("Please set your channel and room before requesting messages.")
 		empty := make([]*proto.Message, 0)
-		return empty
+		return empty, e
 	}
 	err := c.proto.SendGetMessagesRequest(room, channel)
 	c.check(err)
-	var ret proto.GetMessagesResponse
-	msg := <-c.channels.getMessagesResponse
+	ret := <-c.channels.getMessagesResponse
 
-	ret = msg
 	if ret.Code == 200 {
 		//We got a good response...
-		//c.rooms = msg.Rooms
 	} else {
 		log.Println("Not updating the rooms because we got a bad return code...")
 	}
 
-	return ret.Messages
+	//see how big our array is
+	if len(ret.Messages) == 0 {
+		e = true
+	}
+
+	return ret.Messages, e
 }
 
-func roomTree(c *Client) *tview.TreeView {
-	root := tview.NewTreeNode("Rooms").SetColor(tcell.ColorRed)
-	tree := tview.NewTreeView().SetRoot(root).SetCurrentNode(root)
-
+func (c *Client) populateRoomTree() {
+	root := c.roomtree.GetRoot()
 	for _, v := range c.rooms {
 		node := tview.NewTreeNode(v.DisplayName).SetColor(tcell.ColorGreen)
 		for _, v2 := range v.Channels {
@@ -274,122 +286,246 @@ func roomTree(c *Client) *tview.TreeView {
 		}
 		root.AddChild(node)
 	}
+}
 
-	return tree
+func (c *Client) registerPage() *tview.Grid {
+	form := tview.NewForm()
+	form = form.AddDropDown("Type", []string{"Login", "Register"}, 1, func(option string, index int) {
+		//runs when a selection is made
+		if option == "Register" {
+			//They want to register. Since we're already here, do nothing
+		} else if option == "Login" {
+			//They want to see all things related to logging in. The only way to get here is thru the login page, so lets send them back
+			c.pages.SwitchToPage("login")
+			form.GetFormItemByLabel("Type").(*tview.DropDown).SetCurrentOption(1)
+		} else {
+			//no idea what they want
+		}
+	}).AddInputField("Username", "", 20, nil, nil).
+		AddPasswordField("Password", "", 10, '*', nil).
+		AddPasswordField("Verify", "", 10, '*', nil)
+	form = form.AddButton("Register", func() {
+		//get the input elements
+		ufield := form.GetFormItemByLabel("Username").(*tview.InputField)
+		pfield := form.GetFormItemByLabel("Password").(*tview.InputField)
+		verify := form.GetFormItemByLabel("Verify").(*tview.InputField)
+		//make sure the passwords match
+		if pfield.GetText() != verify.GetText() {
+			//mismatch
+			pfield.SetText("")
+			verify.SetText("")
+			c.app.SetFocus(ufield)
+		} else {
+			//passwords match
+			//send a registration request
+			c.SendRegistration(ufield.GetText(), pfield.GetText())
+			//wait for a registration response
+			resp := <-c.channels.registerResponse
+			if resp.Code == 200 {
+				//it worked! send them back to the login
+				c.pages.SwitchToPage("login")
+			} else {
+				//something went wrong
+				pfield.SetText("")
+				verify.SetText("")
+				c.app.SetFocus(ufield)
+			}
+		}
+	})
+	//make the ufield be the default focus
+	form = form.SetFocus(1)
+	grid := tview.NewGrid().SetColumns(0, 20, 0).SetRows(0, 0, 0).AddItem(form, 1, 1, 1, 1, 0, 0, true)
+	grid.SetBorder(true).SetTitle("termtexter").SetTitleAlign(tview.AlignCenter).SetTitleColor(tcell.ColorLimeGreen)
+	return grid
 }
 
 func (c *Client) loginPage() *tview.Grid {
-	form := tview.NewGrid().SetColumns(0, 20, 0).SetRows(0, 0, 0).AddItem(tview.NewForm().
+	form := tview.NewForm()
+	form = form.AddDropDown("Type", []string{"Login", "Register"}, 0, func(option string, index int) {
+		//runs when a selection is made
+		if option == "Register" {
+			//They want to register. Let's make that a different "page"
+			c.pages.SwitchToPage("register")
+			form.GetFormItemByLabel("Type").(*tview.DropDown).SetCurrentOption(0)
+		} else if option == "Login" {
+			//They want to see all things related to logging in. Since we're already here, do nothing
+		} else {
+			//no idea what they want
+		}
+	}).
 		AddInputField("Username", "", 20, nil, nil).
-		AddPasswordField("Password", "", 10, '*', nil).
-		AddButton("Login", func() {
+		AddPasswordField("Password", "", 10, '*', nil)
+	form = form.AddButton("Login", func() {
+		//parse out the input elements
+		ufield := form.GetFormItemByLabel("Username").(*tview.InputField)
+		pfield := form.GetFormItemByLabel("Password").(*tview.InputField)
+		username := ufield.GetText()
+		password := pfield.GetText()
+		//check the login
+		if c.Login(username, password) {
+			c.UpdateRooms()
 			c.pages.SwitchToPage("main")
-		}).
-		AddButton("Quit", func() {
-			c.app.Stop()
-		}).AddCheckbox("Remember", false, nil), 1, 1, 1, 1, 0, 0, true)
-	form.SetBorder(true).SetTitle("termtexter").SetTitleAlign(tview.AlignCenter).SetTitleColor(tcell.ColorLimeGreen)
-	return form
+			//c.getMessages()
+			//c.getUsers()
+			//c.populateRoomTree()
+			c.app.SetFocus(c.chat)
+		} else {
+			//bad credentials, let the user know and blank out their password
+			// ufield.SetText("")
+			pfield.SetText("")
+			//switch focus up to the ufield
+			c.app.SetFocus(ufield)
+		}
+	})
+	form = form.AddButton("Quit", func() {
+		c.app.Stop()
+	}).AddCheckbox("Remember", false, nil)
+	//default focus
+	form = form.SetFocus(4)
+
+	//TESTING: setting to user
+	form.GetFormItemByLabel("Username").(*tview.InputField).SetText("bill")
+	form.GetFormItemByLabel("Password").(*tview.InputField).SetText("asdf")
+
+	grid := tview.NewGrid().SetColumns(0, 20, 0).SetRows(0, 0, 0).AddItem(form, 1, 1, 1, 1, 0, 0, true)
+	grid.SetBorder(true).SetTitle("termtexter").SetTitleAlign(tview.AlignCenter).SetTitleColor(tcell.ColorLimeGreen)
+	return grid
 }
 
 func (c *Client) buildMessage(date string, dispname string, msg string) string {
 	return date + " - " + dispname + " <" + msg + ">\n"
 }
 
-func (c *Client) mainPage(app *tview.Application, pages *tview.Pages) (*tview.Flex, *tview.TreeView, *tview.TextView) {
-
-	//data for the rooms
-	rooms := roomTree(c)
-	rooms.SetBorder(true).SetTitle("Rooms")
-
+func (c *Client) getMessages() {
 	//data for the chat window
 	c.UpdateMessages()
 	messages := ""
-	log.Println(c.rooms[c.curRoom].Channels[c.curChan].Messages)
 	for _, v := range c.rooms[c.curRoom].Channels[c.curChan].Messages {
 		messages += c.buildMessage(v.Created.String(), c.rooms[c.curRoom].Users[v.UserID].DisplayName, v.Message)
 	}
+	c.chat.SetText(strings.Repeat("\n", 1000) + messages)
+}
 
-	chat := tview.NewTextView().SetScrollable(true).ScrollToEnd().SetText(strings.Repeat("\n", 1000) + messages)
-	chat.SetBorder(true).SetTitle("Chat")
+func (c *Client) getUsers() {
+	for _, v := range c.rooms[c.curRoom].Users {
+		c.users.AddItem(v.DisplayName, "", '+', nil)
+	}
+}
+
+func (c *Client) mainMenu() {
+	modal := func(p tview.Primitive, width, height int) tview.Primitive {
+		return tview.NewFlex().
+			AddItem(nil, 0, 1, false).
+			AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+				AddItem(tview.NewList().AddItem("Tanner", "isreal", tcell.RuneDiamond, nil), 0, 1, false).
+				AddItem(p, height, 1, false).
+				AddItem(nil, 0, 1, false), width, 1, false).
+			AddItem(nil, 0, 1, false)
+	}
+	box := tview.NewBox().
+		SetBorder(true).
+		SetTitle("Main Menu").
+		SetBorderColor(tcell.ColorRed)
+
+	m := modal(box, 40, 10)
+	c.pages.AddPage("mainmenu", m, true, false)
+	c.mainmenu = &m
+}
+
+func (c *Client) checkIfMainMenu(event *tcell.EventKey) {
+	if event.Key() == tcell.KeyEsc {
+		//bring up the modal menu
+		c.app.SetFocus(*c.mainmenu)
+		c.pages.ShowPage("mainmenu")
+	}
+}
+
+func (c *Client) mainPage() *tview.Flex {
+	//data for the rooms
+	root := tview.NewTreeNode("Rooms").SetColor(tcell.ColorRed)
+	c.roomtree = tview.NewTreeView().SetRoot(root).SetCurrentNode(root)
+	c.roomtree.SetBorder(true).SetTitle("Rooms")
+
+	c.chat = tview.NewTextView().SetScrollable(true).ScrollToEnd()
+	c.chat.SetBorder(true).SetTitle("Chat")
 	//handles new messages that are dynamically sent in
-	go c.messageHandler(chat)
+	go c.messageHandler(c.chat)
 
 	//chatbox
 	chatbox := tview.NewInputField()
 	chatbox.SetBorder(true).SetTitle("Chatbox")
 
 	//users
-	users := tview.NewList()
-	for _, v := range c.rooms[c.curRoom].Users {
-		users.AddItem(v.DisplayName, "", '+', nil)
-	}
-	users.SetBorder(true).SetTitle("Users")
+	c.users = tview.NewList()
+	c.users.SetBorder(true).SetTitle("Users")
 
 	//flex for the page
 	flex := tview.NewFlex().
-		AddItem(rooms, 20, 1, false).
+		AddItem(c.roomtree, 20, 1, false).
 		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
 			//AddItem(tview.NewBox().SetBorder(true).SetTitle("Top"), 0, 1, false).
-			AddItem(chat, 0, 3, false).
+			AddItem(c.chat, 0, 3, false).
 			AddItem(chatbox, 3, 1, false), 0, 2, false).
-		AddItem(users, 20, 1, false)
+		AddItem(c.users, 20, 1, false)
 
-	chat.SetTitleColor(tcell.ColorRed)
+	c.chat.SetTitleColor(tcell.ColorRed)
 
 	//force a redraw when the textview is updated
-	chat.SetChangedFunc(func() {
-		app.Draw()
+	c.chat.SetChangedFunc(func() {
+		c.app.Draw()
 	})
 
-	rooms.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+	c.roomtree.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		var ret *tcell.EventKey
 		ret = nil
 		if event.Key() == tcell.KeyRight {
-			rooms.SetTitleColor(tcell.ColorWhite)
-			chat.SetTitleColor(tcell.ColorRed)
-			app.SetFocus(chat)
+			c.roomtree.SetTitleColor(tcell.ColorWhite)
+			c.chat.SetTitleColor(tcell.ColorRed)
+			c.app.SetFocus(c.chat)
 		} else {
 			ret = event
 		}
+		c.checkIfMainMenu(event)
 		return ret
 	})
 
-	chat.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+	c.chat.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		var ret *tcell.EventKey
 		ret = nil
 		if event.Key() == tcell.KeyLeft {
-			chat.SetTitleColor(tcell.ColorWhite)
-			rooms.SetTitleColor(tcell.ColorRed)
-			app.SetFocus(rooms)
+			c.chat.SetTitleColor(tcell.ColorWhite)
+			c.roomtree.SetTitleColor(tcell.ColorRed)
+			c.app.SetFocus(c.roomtree)
 			ret = event
 		} else if event.Key() == tcell.KeyDown {
-			chat.SetTitleColor(tcell.ColorWhite)
+			c.chat.SetTitleColor(tcell.ColorWhite)
 			chatbox.SetTitleColor(tcell.ColorRed)
-			app.SetFocus(chatbox)
+			c.app.SetFocus(chatbox)
 		} else if event.Key() == tcell.KeyRight {
-			chat.SetTitleColor(tcell.ColorWhite)
-			users.SetTitleColor(tcell.ColorRed)
-			app.SetFocus(users)
+			c.chat.SetTitleColor(tcell.ColorWhite)
+			c.users.SetTitleColor(tcell.ColorRed)
+			c.app.SetFocus(c.users)
 			ret = event
 		} else if event.Key() == tcell.KeyPgUp {
 			ret = tcell.NewEventKey(tcell.KeyUp, event.Rune(), event.Modifiers())
 		} else if event.Key() == tcell.KeyPgDn {
 			ret = tcell.NewEventKey(tcell.KeyDown, event.Rune(), event.Modifiers())
 		}
+		c.checkIfMainMenu(event)
 		return ret
 	})
 
-	users.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+	c.users.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		var ret *tcell.EventKey
 		ret = nil
 		if event.Key() == tcell.KeyLeft {
-			users.SetTitleColor(tcell.ColorWhite)
-			chat.SetTitleColor(tcell.ColorRed)
-			app.SetFocus(chat)
+			c.users.SetTitleColor(tcell.ColorWhite)
+			c.chat.SetTitleColor(tcell.ColorRed)
+			c.app.SetFocus(c.chat)
 		} else {
 			ret = event
 		}
+		c.checkIfMainMenu(event)
 		return ret
 	})
 
@@ -398,8 +534,8 @@ func (c *Client) mainPage(app *tview.Application, pages *tview.Pages) (*tview.Fl
 		ret = nil
 		if event.Key() == tcell.KeyUp {
 			chatbox.SetTitleColor(tcell.ColorWhite)
-			chat.SetTitleColor(tcell.ColorRed)
-			app.SetFocus(chat)
+			c.chat.SetTitleColor(tcell.ColorRed)
+			c.app.SetFocus(c.chat)
 		} else if event.Key() == tcell.KeyEnter {
 			//We want to send a message to the server on an enter
 			err := c.sendMessage(chatbox.GetText(), c.curRoom, c.curChan)
@@ -409,10 +545,11 @@ func (c *Client) mainPage(app *tview.Application, pages *tview.Pages) (*tview.Fl
 		} else {
 			ret = event
 		}
+		c.checkIfMainMenu(event)
 		return ret
 	})
 
-	return flex, rooms, chat
+	return flex
 }
 
 //packetListener - one go routine that listens on the socket and sends the appropriate object to the appropriate channel
@@ -445,19 +582,19 @@ func (c *Client) packetListener() {
 func main() {
 
 	c := new(Client)
-	c.curRoom = 3
-	c.curChan = 1
+	//c.curRoom = 3
+	//c.curChan = 1
 	c.Init("localhost", 1200)
 
-	c.Login("justin", "poop")
-	c.UpdateRooms()
-
-	flex, _, chat := c.mainPage(c.app, c.pages)
-
-	c.pages.AddPage("main", flex, true, true)
-	c.pages.AddPage("login", c.loginPage(), true, false)
-
-	if err := c.app.SetRoot(c.pages, true).SetFocus(chat).Run(); err != nil {
+	register := c.registerPage()
+	login := c.loginPage()
+	main := c.mainPage()
+	c.pages.AddPage("main", main, true, false)
+	c.pages.AddPage("login", login, true, true)
+	c.pages.AddPage("register", register, true, false)
+	//create the main menu modal
+	c.mainMenu()
+	if err := c.app.SetRoot(c.pages, true).SetFocus(login).Run(); err != nil {
 		panic(err)
 	}
 }

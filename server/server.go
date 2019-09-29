@@ -113,38 +113,47 @@ func (s *Server) handleLogin(l proto.Login, p proto.Proto) int {
 	}
 
 	// We have a login packet, it has a username and password, let's check it against the database
-	id, _ := s.db.GetUserID(l.Username)
-	intid, err := strconv.Atoi(id)
-	s.check(err)
-	if id != "" {
-		res := s.db.IsValidLogin(id, l.Password)
-		if res {
-			//They are a real user. Give them a unique id for their successful login. This key lets them send messages from their account on the machine they logged in from
-			uuid, err := uuid.NewRandom()
-			s.check(err)
-			// Add this key to the DB, so we can check with this for each message
-			err = s.db.AddSession(id, uuid.String())
-			s.check(err)
-			// Send the packet with the updates
-			err = p.SendLoginResponse(uuid.String())
-			//add this proto object to our linked list of sockets for this user
-			//see if it has been initalized yet
-			if s.connections[intid] == nil {
-				s.connections[intid] = list.New()
+	id, err := s.db.GetUserID(l.Username)
+	var intid int
+	if err != nil {
+		intid = -1
+		log.Println("Bad login")
+		// They don't exist, craft a response that doesn't have a good login
+		err := p.SendBadLoginResponse()
+		s.check(err)
+	} else {
+		intid, err = strconv.Atoi(id)
+		s.check(err)
+		if id != "" {
+			res := s.db.IsValidLogin(id, l.Password)
+			if res {
+				//They are a real user. Give them a unique id for their successful login. This key lets them send messages from their account on the machine they logged in from
+				uuid, err := uuid.NewRandom()
+				s.check(err)
+				// Add this key to the DB, so we can check with this for each message
+				err = s.db.AddSession(id, uuid.String())
+				s.check(err)
+				// Send the packet with the updates
+				err = p.SendLoginResponse(uuid.String())
+				//add this proto object to our linked list of sockets for this user
+				//see if it has been initalized yet
+				if s.connections[intid] == nil {
+					s.connections[intid] = list.New()
+				}
+				s.connections[intid].PushBack(&p)
+				log.Println("Added the user to the linked list")
+				//See what rooms this user is in (for the server's records)
+				s.updateServerRooms(id)
+			} else {
+				// They don't exist, craft a response that doesn't have a good login
+				err := p.SendBadLoginResponse()
+				s.check(err)
 			}
-			s.connections[intid].PushBack(&p)
-			log.Println("Added the user to the linked list")
-			//See what rooms this user is in (for the server's records)
-			s.updateServerRooms(id)
 		} else {
 			// They don't exist, craft a response that doesn't have a good login
 			err := p.SendBadLoginResponse()
 			s.check(err)
 		}
-	} else {
-		// They don't exist, craft a response that doesn't have a good login
-		err := p.SendBadLoginResponse()
-		s.check(err)
 	}
 	return intid
 }
@@ -338,7 +347,7 @@ func (s *Server) handleClient(conn net.Conn) {
 
 	//get a proto object which handles the message/protocol for us
 	p := proto.Proto{Conn: conn}
-	var id int //the id of the client, if we get that far
+	id := -1 //the id of the client, if we get that far
 	flag := false
 	for !flag {
 		//based on the message type, take different actions
