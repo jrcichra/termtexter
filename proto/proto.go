@@ -113,6 +113,7 @@ type JoinRoomResponse struct {
 	Timestamp int64  `json:"timestamp"`
 	Room      string `json:"room"`
 	Code      int    `json:"code"`
+	RoomID    int    `json:"room_id"`
 }
 
 //CreateRoomRequest - Packet representing a room create
@@ -368,12 +369,13 @@ func (p Proto) SendCreateRoomResponse(r string, code int) error {
 }
 
 //SendJoinRoomResponse - sends a join room response to the client
-func (p Proto) SendJoinRoomResponse(r string, code int) error {
+func (p Proto) SendJoinRoomResponse(r string, code int, rid int) error {
 	jrr := JoinRoomResponse{}
 	jrr.Timestamp = time.Now().Unix()
 	jrr.Type = JOINROOMRESPONSE
 	jrr.Code = code
 	jrr.Room = r
+	jrr.RoomID = rid
 	j, err := json.Marshal(jrr)
 	if err != nil {
 		return err

@@ -13,6 +13,7 @@ import (
 	ttdb "termtexter/db"
 	proto "termtexter/proto"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/google/uuid"
 )
 
@@ -207,7 +208,7 @@ func (s *Server) handleCreateRoom(cr proto.CreateRoomRequest, p proto.Proto) {
 	res, err := s.db.DoesRoomExist(cr.Room)
 	s.check(err)
 
-	if res {
+	if res != -1 {
 		//The room exists...give them an error
 		p.SendCreateRoomResponse(cr.Room, HTTP_BADREQUEST)
 	} else {
@@ -237,29 +238,29 @@ func (s *Server) handleJoinRoom(jr proto.JoinRoomRequest, p proto.Proto) {
 	s.check(err)
 	if id == "" {
 		//They're not a person in the database
-		p.SendJoinRoomResponse(jr.Room, HTTP_FORBIDDEN)
+		p.SendJoinRoomResponse(jr.Room, HTTP_FORBIDDEN, -1)
 		return
 	}
 
 	//See if the room exists
 	res, err := s.db.DoesRoomExist(jr.Room)
 	s.check(err)
-	if res {
+	if res != -1 {
 		//This room does exist...
-		err = s.db.AddUserToRoom(id, jr.Room)
+		err = s.db.AddUserToRoom(id, res)
 		s.check(err)
 		if err == nil {
 			err = s.updateServerRooms(id)
 			if err == nil {
-				p.SendJoinRoomResponse(jr.Room, HTTP_OK)
+				p.SendJoinRoomResponse(jr.Room, HTTP_OK, res)
 			} else {
 				//Something went wrong updating the server cache
-				p.SendJoinRoomResponse(jr.Room, HTTP_ERROR)
+				p.SendJoinRoomResponse(jr.Room, HTTP_ERROR, -1)
 			}
 		}
 	} else {
 		//The room does not exist...send them a sad response
-		p.SendJoinRoomResponse(jr.Room, HTTP_BADREQUEST)
+		p.SendJoinRoomResponse(jr.Room, HTTP_BADREQUEST, -1)
 	}
 
 }
@@ -329,6 +330,7 @@ func (s *Server) handleGetRooms(gr proto.GetRoomsRequest, p proto.Proto) {
 	s.check(err)
 	if id == "" {
 		//They're not a person in the database
+		log.Println("Bad get rooms 1")
 		p.SendGetRoomsResponse(HTTP_FORBIDDEN, nil)
 		return
 	}
@@ -338,6 +340,8 @@ func (s *Server) handleGetRooms(gr proto.GetRoomsRequest, p proto.Proto) {
 	s.check(err)
 
 	//Send them the list back
+	log.Println("Good get rooms 1")
+	spew.Dump(res)
 	p.SendGetRoomsResponse(HTTP_OK, res)
 
 }

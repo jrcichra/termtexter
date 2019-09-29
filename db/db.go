@@ -51,22 +51,15 @@ func (d DB) GetUserIDFromKey(key string) (string, error) {
 	return u, err
 }
 
-//DoesRoomExist - returns if this room exists
-func (d DB) DoesRoomExist(rid string) (bool, error) {
-	rows, err := d.dbh.Query("select 1 from rooms where name = ?", rid)
+//DoesRoomExist - returns the room number if it exists
+func (d DB) DoesRoomExist(rid string) (int, error) {
+	rows, err := d.dbh.Query("select room_id from rooms where name = ?", rid)
 	check(err)
 	defer rows.Close()
-	c := 0
-	for rows.Next() {
-		c++
-	}
-	var b bool
-	if c > 0 {
-		b = true
-	} else {
-		b = false
-	}
-	return b, err
+	i := -1
+	rows.Next()
+	err = rows.Scan(&i)
+	return i, err
 }
 
 //PostMessage -
@@ -136,7 +129,7 @@ func (d DB) GetRooms(uid string) (map[int]*proto.Room, error) {
 }
 
 //AddUserToRoom - given an id, add this id into the mapping table
-func (d DB) AddUserToRoom(uid string, rid string) error {
+func (d DB) AddUserToRoom(uid string, rid int) error {
 	_, err := d.dbh.Exec("insert into room_users (room_id,user_id) values (?,?)", rid, uid)
 	return err
 }

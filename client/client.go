@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -33,19 +32,20 @@ type channels struct {
 
 //Client - client struct
 type Client struct {
-	conn     net.Conn
-	proto    proto.Proto
-	rooms    map[int]*proto.Room
-	curRoom  int
-	curChan  int
-	loggedIn bool
-	channels channels
-	app      *tview.Application
-	pages    *tview.Pages
-	chat     *tview.TextView
-	users    *tview.List
-	roomtree *tview.TreeView
-	mainmenu *tview.Primitive
+	conn         net.Conn
+	proto        proto.Proto
+	rooms        map[int]*proto.Room
+	curRoom      int
+	curChan      int
+	loggedIn     bool
+	channels     channels
+	app          *tview.Application
+	pages        *tview.Pages
+	chat         *tview.TextView
+	users        *tview.List
+	roomtree     *tview.TreeView
+	mainmenu     *tview.Primitive
+	mainmenuform *tview.Form
 }
 
 func (c Client) check(e error) {
@@ -125,12 +125,12 @@ func (c *Client) CreateRoom(name string, password string) int {
 	res = msg
 	if res.Code == HTTP_OK {
 		//We joined the room
-		log.Println("Successfully created the", name, "room.")
+		// log.Println("Successfully created the", name, "room.")
 	} else if res.Code == HTTP_BADREQUEST {
 		//The room already exists
-		log.Println("This room already exists", name)
+		// log.Println("This room already exists", name)
 	} else {
-		log.Println("Unknown return code from the server:", res.Code)
+		// log.Println("Unknown return code from the server:", res.Code)
 	}
 
 	return res.Code
@@ -147,16 +147,18 @@ func (c *Client) JoinRoom(name string, password string) bool {
 	res = msg
 	if res.Code == HTTP_OK {
 		//We joined the room
-		log.Println("Successfully joined the", name, "room.")
+		// log.Println("Successfully joined the", name, "room.")
 		ret = true
+		c.curRoom = res.RoomID
+		c.curChan = -1
 	} else if res.Code == HTTP_BADREQUEST {
 		//The room doesn't exist
-		log.Println("This room doesn't exist (yet):", name)
+		// log.Println("This room doesn't exist (yet):", name)
 	} else if res.Code == HTTP_FORBIDDEN {
 		//bad
-		log.Println("The password you entered for this room is incorrect, or you were banned from this room")
+		// log.Println("The password you entered for this room is incorrect, or you were banned from this room")
 	} else {
-		log.Println("Unknown return code from the server:", res.Code)
+		// log.Println("Unknown return code from the server:", res.Code)
 	}
 
 	return ret
@@ -187,7 +189,7 @@ func (c *Client) UpdateRooms() {
 }
 
 //GetRooms - replaces the list of rooms in the object with what the database says
-func (c Client) GetRooms() map[int]*proto.Room {
+func (c *Client) GetRooms() map[int]*proto.Room {
 	err := c.proto.SendGetRoomsRequest()
 	c.check(err)
 	var ret proto.GetRoomsResponse
@@ -197,7 +199,7 @@ func (c Client) GetRooms() map[int]*proto.Room {
 		//We got a good response...
 		//c.rooms = msg.Rooms
 	} else {
-		log.Println("Not updating the rooms because we got a bad return code...")
+		// log.Println("Not updating the rooms because we got a bad return code...")
 	}
 
 	return ret.Rooms
@@ -222,7 +224,7 @@ func (c Client) PrintRooms() {
 
 func (c *Client) sendMessage(msg string, room int, channel int) error {
 	if room == -1 || channel == -1 {
-		fmt.Println("Please set your channel and room before sending a message.")
+		// fmt.Println("Please set your channel and room before sending a message.")
 		return nil
 	}
 	err := c.proto.SendPostMessageRequest(msg, room, channel)
@@ -234,7 +236,7 @@ func (c *Client) sendMessage(msg string, room int, channel int) error {
 	if ret.Code == 200 {
 		//We got a good response...
 	} else {
-		log.Println("We got a bad return code...")
+		// log.Println("We got a bad return code...")
 	}
 
 	return err
@@ -254,7 +256,7 @@ func (c *Client) UpdateMessages() {
 func (c *Client) GetMessages(room int, channel int) ([]*proto.Message, bool) {
 	e := true
 	if room == -1 || channel == -1 {
-		fmt.Println("Please set your channel and room before requesting messages.")
+		// fmt.Println("Please set your channel and room before requesting messages.")
 		empty := make([]*proto.Message, 0)
 		return empty, e
 	}
@@ -265,7 +267,7 @@ func (c *Client) GetMessages(room int, channel int) ([]*proto.Message, bool) {
 	if ret.Code == 200 {
 		//We got a good response...
 	} else {
-		log.Println("Not updating the rooms because we got a bad return code...")
+		// log.Println("Not updating the rooms because we got a bad return code...")
 	}
 
 	//see how big our array is
@@ -363,11 +365,8 @@ func (c *Client) loginPage() *tview.Grid {
 		password := pfield.GetText()
 		//check the login
 		if c.Login(username, password) {
-			c.UpdateRooms()
 			c.pages.SwitchToPage("main")
-			//c.getMessages()
-			//c.getUsers()
-			//c.populateRoomTree()
+			c.refreshClient()
 			c.app.SetFocus(c.chat)
 		} else {
 			//bad credentials, let the user know and blank out their password
@@ -407,9 +406,87 @@ func (c *Client) getMessages() {
 }
 
 func (c *Client) getUsers() {
+
 	for _, v := range c.rooms[c.curRoom].Users {
 		c.users.AddItem(v.DisplayName, "", '+', nil)
 	}
+}
+
+func (c *Client) refreshClient() {
+	// defer c.PrintRooms()
+	c.UpdateRooms()
+	//set our room and channel if we don't have one and there are ones to be a part of
+	if c.curRoom == -1 && len(c.rooms) > 0 {
+		for k := range c.rooms {
+			c.curRoom = k
+			break
+		}
+		for k := range c.rooms[c.curRoom].Channels {
+			c.curChan = k
+			break
+		}
+	} else if c.curChan == -1 && len(c.rooms) > 0 && c.curRoom != -1 {
+		for k := range c.rooms[c.curRoom].Channels {
+			c.curChan = k
+			break
+		}
+	}
+
+	if c.curRoom != -1 && c.curChan != -1 {
+		c.UpdateMessages()
+		c.populateRoomTree()
+		c.getUsers()
+	}
+}
+
+func (c *Client) joinRoomForm() {
+	form := c.mainmenuform
+	form = form.AddInputField("Room Name", "", 10, nil, nil)
+	form = form.AddInputField("Room Password", "", 10, nil, nil).
+		AddButton("Join/Create", func() {
+			//They want to join or create a room.
+			rno := form.GetFormItemByLabel("Room Name").(*tview.InputField)
+			rpo := form.GetFormItemByLabel("Room Password").(*tview.InputField)
+
+			//get the values out
+			rn := rno.GetText()
+			rp := rpo.GetText()
+
+			//Do the proper based on the dropdown
+			_, ddStr := form.GetFormItemByLabel("Option").(*tview.DropDown).GetCurrentOption()
+			switch ddStr {
+			case "Join Room":
+				if c.JoinRoom(rn, rp) {
+					//it worked
+					c.refreshClient()
+					c.pages.HidePage("mainmenu")
+					c.app.SetFocus(c.chat)
+				} else {
+					//didn't work, clear the fields
+					rno.SetText("")
+					rpo.SetText("")
+					c.app.SetFocus(form.GetFormItemByLabel("Room Name"))
+				}
+			case "Create Room":
+				if c.CreateRoom(rn, rp) == 200 {
+					//it worked
+					c.refreshClient()
+					c.pages.HidePage("mainmenu")
+					c.app.SetFocus(c.chat)
+				} else {
+					//didn't work, clear the fields
+					rno.SetText("")
+					rpo.SetText("")
+					c.app.SetFocus(form.GetFormItemByLabel("Room Name"))
+				}
+			}
+
+		}).
+		AddButton("Cancel", func() {
+			//when they hit the cancel button, close this window and switch focus back
+			c.pages.HidePage("mainmenu")
+			c.app.SetFocus(c.chat)
+		})
 }
 
 func (c *Client) mainMenu() {
@@ -417,26 +494,28 @@ func (c *Client) mainMenu() {
 		return tview.NewFlex().
 			AddItem(nil, 0, 1, false).
 			AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-				AddItem(tview.NewList().AddItem("Tanner", "isreal", tcell.RuneDiamond, nil), 0, 1, false).
+				AddItem(nil, 0, 1, false).
 				AddItem(p, height, 1, false).
 				AddItem(nil, 0, 1, false), width, 1, false).
 			AddItem(nil, 0, 1, false)
 	}
-	box := tview.NewBox().
-		SetBorder(true).
-		SetTitle("Main Menu").
-		SetBorderColor(tcell.ColorRed)
+	form := tview.NewForm().
+		AddDropDown("Option", []string{"Join Room", "Create Room"}, 0, nil)
+	form.SetBorder(true).SetTitle("Main Menu").SetTitleAlign(tview.AlignLeft).SetBorderColor(tcell.ColorRed)
 
-	m := modal(box, 40, 10)
+	m := modal(form, 40, 20)
 	c.pages.AddPage("mainmenu", m, true, false)
 	c.mainmenu = &m
+	c.mainmenuform = form
+	//default to joining a room
+	c.joinRoomForm()
 }
 
 func (c *Client) checkIfMainMenu(event *tcell.EventKey) {
 	if event.Key() == tcell.KeyEsc {
 		//bring up the modal menu
-		c.app.SetFocus(*c.mainmenu)
 		c.pages.ShowPage("mainmenu")
+		c.app.SetFocus(c.mainmenuform)
 	}
 }
 
@@ -573,8 +652,8 @@ func (c *Client) packetListener() {
 		case proto.DynamicMessage:
 			c.channels.dynamicMessage <- msg
 		default:
-			log.Println("I don't know what I just got")
-			log.Println(msg)
+			// log.Println("I don't know what I just got")
+			// log.Println(msg)
 		}
 	}
 }
@@ -582,8 +661,8 @@ func (c *Client) packetListener() {
 func main() {
 
 	c := new(Client)
-	//c.curRoom = 3
-	//c.curChan = 1
+	c.curRoom = -1
+	c.curChan = -1
 	c.Init("localhost", 1200)
 
 	register := c.registerPage()
